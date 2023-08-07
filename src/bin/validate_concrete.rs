@@ -1,4 +1,5 @@
 //! Load a CBOR file and concretely execute it, checking each step against the CBOR trace.
+use std::collections::HashMap;
 use std::env;
 use env_logger;
 use log::trace;
@@ -15,6 +16,14 @@ fn run(path: &str) {
     let init_state = import::convert_init_state(&exec);
     eprintln!("loaded memory: {} words", init_state.mem.len());
     trace!("initial regs = {:?}", init_state.regs);
+
+    let mut addr_labels = HashMap::new();
+    for (label, &addr) in &exec.labels {
+        if label.starts_with(".") || label.starts_with("__cc_") {
+            continue;
+        }
+        addr_labels.entry(addr).or_insert(Vec::new()).push(label);
+    }
 
     let mut state = init_state;
     let mut cycle = 0;
@@ -40,6 +49,10 @@ fn run(path: &str) {
             }).next();
 
             let pc = state.pc;
+            if let Some(labels) = addr_labels.get(&pc) {
+                eprintln!("cycle {}: enter {:?}", cycle, labels);
+            }
+
             let instr = prog.get(&pc).cloned().unwrap_or_else(|| {
                 panic!("program executed out of bounds at {}", pc);
             });
