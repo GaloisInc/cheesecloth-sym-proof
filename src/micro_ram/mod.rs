@@ -3,6 +3,9 @@ use std::mem;
 use crate::{Word, WORD_BYTES, WORD_BITS, Addr, BinOp};
 
 
+pub mod import;
+
+
 type Reg = u8;
 
 #[derive(Clone, Copy, Debug)]
@@ -58,7 +61,7 @@ impl MemWidth {
 pub const NUM_REGS: usize = 33;
 
 #[derive(Clone, Debug)]
-struct State {
+pub struct State {
     pub pc: Addr,
     pub regs: [Word; NUM_REGS],
     pub mem: HashMap<Addr, Word>,
@@ -127,7 +130,7 @@ impl State {
         }
     }
 
-    pub fn step(&mut self, instr: Instr) {
+    pub fn step(&mut self, instr: Instr, advice: Option<Word>) {
         let x = self.reg_value(instr.r1);
         let y = self.operand_value(instr.op2);
 
@@ -158,7 +161,7 @@ impl State {
                         if y == 0 { 0 } else { x / y }
                     },
                     BinOp::Umod => {
-                        if y == 0 { x } else { x / y }
+                        if y == 0 { x } else { x % y }
                     },
                     BinOp::Shl => {
                         if y >= WORD_BITS { 0 } else { x << y as u32 }
@@ -216,9 +219,11 @@ impl State {
                 self.mem_store(w, y, x);
             },
             Opcode::Advise => {
-                // Always provide zero as the advice.  This happens to work for the `advise`
-                // instruction in `malloc`.
-                self.set_reg(instr.rd, 0);
+                let val = advice.unwrap_or_else(|| {
+                    eprintln!("warning: missing advice");
+                    0
+                });
+                self.set_reg(instr.rd, val);
             },
         }
 
