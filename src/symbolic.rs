@@ -175,57 +175,6 @@ pub struct State {
     pub preds: Vec<Pred>,
 }
 
-#[derive(Clone, Debug)]
-pub enum MemState {
-    Concrete(MemConcrete),
-    Map(MemMap),
-    Snapshot(MemSnapshot),
-    Log(MemLog),
-    Multi(MemMulti),
-}
-
-#[derive(Clone, Debug)]
-pub struct MemConcrete {
-    pub m: HashMap<Addr, Word>,
-    pub max: Addr,
-}
-
-#[derive(Clone, Debug)]
-pub struct MemMap {
-    /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
-    /// `Term`.  The `u8` gives the index of the byte in little-endian order.
-    pub m: HashMap<Addr, (Term, u8)>,
-    pub max: Addr,
-}
-
-#[derive(Clone, Debug)]
-pub struct MemSnapshot {
-    pub base: Addr,
-}
-
-#[derive(Clone, Debug)]
-pub struct MemLog {
-    pub l: Vec<(Term, Term, MemWidth)>,
-}
-
-/// Multiple disjoint regions of memory, each with a separate `MemState` representation.  Adding a
-/// new region is legal only if it's provably disjoint from all existing regions.
-///
-/// When accessing a region, the region's base address is subtracted before accessing the child
-/// `MemState`.  This allows things like using `MemConcrete` in a symbolic-base `objs` entry: the
-/// symbolic base address is subtracted out, and the `MemConcrete` is accessed only at a concrete
-/// offset.
-#[derive(Clone, Debug)]
-pub struct MemMulti {
-    /// Memory regions with concrete bounds.  Each entry is `(start, end, mem)`.
-    pub conc: Vec<(u64, u64, MemState)>,
-    /// Memory objects with symbolic addresses but concrete sizes.  Each entry is `(start, len,
-    /// mem)`.
-    pub objs: Vec<(VarId, u64, MemState)>,
-    /// Fully symbolic memory regions.  Each entry is `(start, end, mem)`.
-    pub sym: Vec<(Term, Term, MemState)>,
-}
-
 
 pub trait Memory {
     /// Store to a concrete address.
@@ -234,6 +183,15 @@ pub trait Memory {
 
     fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String>;
     fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String>;
+}
+
+#[derive(Clone, Debug)]
+pub enum MemState {
+    Concrete(MemConcrete),
+    Map(MemMap),
+    Snapshot(MemSnapshot),
+    Log(MemLog),
+    Multi(MemMulti),
 }
 
 impl Memory for MemState {
@@ -276,6 +234,12 @@ impl Memory for MemState {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct MemConcrete {
+    pub m: HashMap<Addr, Word>,
+    pub max: Addr,
+}
+
 impl Memory for MemConcrete {
     fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
         if addr >= self.max {
@@ -306,6 +270,14 @@ impl Memory for MemConcrete {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct MemMap {
+    /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
+    /// `Term`.  The `u8` gives the index of the byte in little-endian order.
+    pub m: HashMap<Addr, (Term, u8)>,
+    pub max: Addr,
+}
+
 impl Memory for MemMap {
     fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
         todo!("MemMap NYI")
@@ -320,6 +292,11 @@ impl Memory for MemMap {
     fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
         todo!("MemMap NYI")
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct MemSnapshot {
+    pub base: Addr,
 }
 
 impl Memory for MemSnapshot {
@@ -338,6 +315,11 @@ impl Memory for MemSnapshot {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct MemLog {
+    pub l: Vec<(Term, Term, MemWidth)>,
+}
+
 impl Memory for MemLog {
     fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
         self.store(w, Term::const_(addr), val)
@@ -353,6 +335,24 @@ impl Memory for MemLog {
     fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
         Err("MemLog load NYI".into())
     }
+}
+
+/// Multiple disjoint regions of memory, each with a separate `MemState` representation.  Adding a
+/// new region is legal only if it's provably disjoint from all existing regions.
+///
+/// When accessing a region, the region's base address is subtracted before accessing the child
+/// `MemState`.  This allows things like using `MemConcrete` in a symbolic-base `objs` entry: the
+/// symbolic base address is subtracted out, and the `MemConcrete` is accessed only at a concrete
+/// offset.
+#[derive(Clone, Debug)]
+pub struct MemMulti {
+    /// Memory regions with concrete bounds.  Each entry is `(start, end, mem)`.
+    pub conc: Vec<(u64, u64, MemState)>,
+    /// Memory objects with symbolic addresses but concrete sizes.  Each entry is `(start, len,
+    /// mem)`.
+    pub objs: Vec<(VarId, u64, MemState)>,
+    /// Fully symbolic memory regions.  Each entry is `(start, end, mem)`.
+    pub sym: Vec<(Term, Term, MemState)>,
 }
 
 impl Memory for MemMulti {
