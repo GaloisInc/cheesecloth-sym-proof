@@ -6,7 +6,7 @@ use crate::{Word, WORD_BYTES, WORD_BITS, Addr, BinOp};
 pub mod import;
 
 
-type Reg = u8;
+pub type Reg = u8;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Instr {
@@ -22,7 +22,7 @@ pub enum Operand {
     Imm(Word),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Opcode {
     Binary(BinOp),
     Not,
@@ -38,7 +38,7 @@ pub enum Opcode {
     Advise,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MemWidth {
     W1,
     W2,
@@ -94,40 +94,11 @@ impl State {
     }
 
     fn mem_store(&mut self, w: MemWidth, addr: Addr, val: Word) {
-        let w = w.bytes();
-        assert!(addr % w == 0, "misaligned access at address 0x{:x}", addr);
-        debug_assert!(w <= WORD_BYTES);
-        if w == WORD_BYTES {
-            self.mem.insert(addr, val);
-        } else {
-            let offset_mask = WORD_BYTES as Addr - 1;
-            let word_addr = addr & !offset_mask;
-            let offset = addr & offset_mask;
-            let offset_bits = offset * 8;
-
-            let mask = (1 << (8 * w)) - 1;
-            let x0 = self.mem.get(&word_addr).copied().unwrap_or(0);
-            let x1 = x0 & !(mask << offset_bits) | ((val & mask) << offset_bits);
-            self.mem.insert(word_addr, x1);
-        }
+        mem_store(&mut self.mem, w, addr, val);
     }
 
-    fn mem_load(&mut self, w: MemWidth, addr: Addr) -> Word {
-        let w = w.bytes();
-        assert!(addr % w == 0, "misaligned access at address 0x{:x}", addr);
-        debug_assert!(w <= WORD_BYTES);
-        if w == WORD_BYTES {
-            self.mem.get(&addr).copied().unwrap_or(0)
-        } else {
-            let offset_mask = WORD_BYTES as Addr - 1;
-            let word_addr = addr & !offset_mask;
-            let offset = addr & offset_mask;
-            let offset_bits = offset * 8;
-
-            let mask = (1 << (8 * w)) - 1;
-            let x = self.mem.get(&word_addr).copied().unwrap_or(0);
-            (x >> offset_bits) & mask
-        }
+    fn mem_load(&self, w: MemWidth, addr: Addr) -> Word {
+        mem_load(&self.mem, w, addr)
     }
 
     pub fn step(&mut self, instr: Instr, advice: Option<Word>) {
@@ -136,45 +107,7 @@ impl State {
 
         match instr.opcode {
             Opcode::Binary(b) => {
-                let z = match b {
-                    BinOp::And => x & y,
-                    BinOp::Or => x | y,
-                    BinOp::Xor => x ^ y,
-                    BinOp::Add => x.wrapping_add(y),
-                    BinOp::Sub => x.wrapping_sub(y),
-                    BinOp::Mull => x.wrapping_mul(y),
-                    BinOp::Umulh => {
-                        debug_assert_eq!(mem::size_of::<Word>(), 8);
-                        let xx = x as u128;
-                        let yy = y as u128;
-                        let zz = xx * yy;
-                        zz as u64
-                    },
-                    BinOp::Smulh => {
-                        debug_assert_eq!(mem::size_of::<Word>(), 8);
-                        let xx = x as i64 as i128;
-                        let yy = y as i64 as i128;
-                        let zz = xx * yy;
-                        zz as u64
-                    },
-                    BinOp::Udiv => {
-                        if y == 0 { 0 } else { x / y }
-                    },
-                    BinOp::Umod => {
-                        if y == 0 { x } else { x % y }
-                    },
-                    BinOp::Shl => {
-                        if y >= WORD_BITS { 0 } else { x << y as u32 }
-                    },
-                    BinOp::Shr => {
-                        if y >= WORD_BITS { 0 } else { x >> y as u32 }
-                    },
-                    BinOp::Cmpe => (x == y) as Word,
-                    BinOp::Cmpa => (x > y) as Word,
-                    BinOp::Cmpae => (x >= y) as Word,
-                    BinOp::Cmpg => ((x as i64) > (y as i64)) as Word,
-                    BinOp::Cmpge => ((x as i64) >= (y as i64)) as Word,
-                };
+                let z = b.eval(x, y);
                 self.set_reg(instr.rd, z);
             },
             Opcode::Not => {
@@ -228,5 +161,43 @@ impl State {
         }
 
         self.pc = self.pc.wrapping_add(1);
+    }
+}
+
+
+pub fn mem_store(mem: &mut HashMap<Addr, Word>, w: MemWidth, addr: Addr, val: Word) {
+    let w = w.bytes();
+    assert!(addr % w == 0, "misaligned access at address 0x{:x}", addr);
+    debug_assert!(w <= WORD_BYTES);
+    if w == WORD_BYTES {
+        mem.insert(addr, val);
+    } else {
+        let offset_mask = WORD_BYTES as Addr - 1;
+        let word_addr = addr & !offset_mask;
+        let offset = addr & offset_mask;
+        let offset_bits = offset * 8;
+
+        let mask = (1 << (8 * w)) - 1;
+        let x0 = mem.get(&word_addr).copied().unwrap_or(0);
+        let x1 = x0 & !(mask << offset_bits) | ((val & mask) << offset_bits);
+        mem.insert(word_addr, x1);
+    }
+}
+
+pub fn mem_load(mem: &HashMap<Addr, Word>, w: MemWidth, addr: Addr) -> Word {
+    let w = w.bytes();
+    assert!(addr % w == 0, "misaligned access at address 0x{:x}", addr);
+    debug_assert!(w <= WORD_BYTES);
+    if w == WORD_BYTES {
+        mem.get(&addr).copied().unwrap_or(0)
+    } else {
+        let offset_mask = WORD_BYTES as Addr - 1;
+        let word_addr = addr & !offset_mask;
+        let offset = addr & offset_mask;
+        let offset_bits = offset * 8;
+
+        let mask = (1 << (8 * w)) - 1;
+        let x = mem.get(&word_addr).copied().unwrap_or(0);
+        (x >> offset_bits) & mask
     }
 }
