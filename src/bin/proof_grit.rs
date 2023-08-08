@@ -4,10 +4,10 @@ use std::convert::TryFrom;
 use std::env;
 use env_logger;
 use log::trace;
-use witness_checker::micro_ram::types::Advice;
-use sym_proof::{Addr, Word, WORD_BYTES};
+use sym_proof::Addr;
 use sym_proof::micro_ram::NUM_REGS;
 use sym_proof::micro_ram::import;
+use sym_proof::proof::{Proof, Prop};
 use sym_proof::symbolic::{State, MemState, MemConcrete, VarCounter, Term, Pred};
 
 fn run(path: &str) -> Result<(), String> {
@@ -27,8 +27,10 @@ fn run(path: &str) -> Result<(), String> {
         let instr = prog[&conc_state.pc];
         conc_state.step(instr, None);
     }
-    // Run concretely to the start of the loop.
-    for i in 0 .. 8 {
+    // Run concretely: 8 steps to the start of the loop, then 11 more steps to run the first
+    // iteration up to the condition check.  The loop is structured as a do/while, so the condition
+    // check comes at the end.
+    for _ in 0 .. 8 + 11 {
         let instr = prog[&conc_state.pc];
         eprintln!("run concrete [{}]: {:?}", conc_state.pc, instr);
         conc_state.step(instr, None);
@@ -42,6 +44,8 @@ fn run(path: &str) -> Result<(), String> {
     eprintln!("loop start label = {:?}",
         exec.labels.iter().filter(|&(_, &v)| v == conc_state.pc).collect::<Vec<_>>());
 
+    let mut pf = Proof::new(prog);
+
     // Build initial symbolic state
     let mut v = VarCounter::new();
     let regs = (0 .. NUM_REGS).map(|_| v.var()).collect::<Box<[_]>>();
@@ -53,37 +57,33 @@ fn run(path: &str) -> Result<(), String> {
         m: HashMap::new(),
         max: Addr::MAX,
     });
-    let mut state = State::new(
+    let state = State::new(
+        v,
         conc_state.pc,
         regs.clone(),
         mem,
         Vec::new(),
     );
 
-    /*
-    state.tactic_run_concrete(&prog)?;
-    state.admit(Pred::Eq(Term::cmpae(regs[12].clone(), 32.into()), 1.into()));
-    state.tactic_step_jmp_taken(prog[&state.pc()])?;
-    */
+    let l_step = pf.rule_step_zero(state);
+    pf.rule_step_extend(l_step, |mut spf| {
+        spf.tactic_step_concrete()?;
+        spf.admit(Pred::Eq(
+            Term::cmpe(regs[12].clone(), 0.into()),
+            0.into(),
+        ));
+        spf.tactic_step_jmp_taken()?;
+        spf.tactic_run_concrete()?;
+        Ok(())
+    })?;
 
-    let loop_start = state.clone();
-
-    state.tactic_run_concrete(&prog)?;
-    state.admit(Pred::Eq(
-        Term::cmpe(Term::add(regs[12].clone(), (-1_i64 as u64).into()), 0.into()),
-        0.into(),
-    ));
-    state.tactic_step_jmp_taken(prog[&state.pc()])?;
-
-    let loop_end = state.clone();
+    let (loop_start, loop_end) = match *pf.lemma(l_step) {
+        Prop::Step(ref a, ref b) => (a, b),
+    };
 
     for i in 0 .. NUM_REGS {
         eprintln!("{:2}: {} -> {}", i, loop_start.regs()[i], loop_end.regs()[i]);
     }
-
-    let instr = prog[&state.pc()];
-    eprintln!("next: {:?}", instr);
-    state.tactic_step_concrete(instr)?;
 
     Ok(())
 }

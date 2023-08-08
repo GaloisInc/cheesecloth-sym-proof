@@ -2,6 +2,7 @@ use std::mem;
 
 
 pub mod micro_ram;
+pub mod proof;
 pub mod symbolic;
 
 

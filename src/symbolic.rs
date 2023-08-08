@@ -129,6 +129,7 @@ impl fmt::Display for TermInner {
 }
 
 
+#[derive(Clone, Debug)]
 pub struct VarCounter(VarId);
 
 impl VarCounter {
@@ -152,16 +153,29 @@ pub enum Pred {
     InRange { x: Term, start: Term, end: Term },
 }
 
-
-#[derive(Clone)]
-pub struct State {
-    pc: Word,
-    regs: [Term; NUM_REGS],
-    mem: MemState,
-    preds: Vec<Pred>,
+impl fmt::Display for Pred {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Pred::Nonzero(ref t) => write!(f, "nonzero({})", t),
+            Pred::Eq(ref a, ref b) => write!(f, "eq({}, {})", a, b),
+            Pred::InRange { ref x, ref start, ref end } =>
+                write!(f, "inrange({}, {}, {})", x, start, end),
+        }
+    }
 }
 
-#[derive(Clone)]
+
+
+#[derive(Clone, Debug)]
+pub struct State {
+    pub var_counter: VarCounter,
+    pub pc: Word,
+    pub regs: [Term; NUM_REGS],
+    pub mem: MemState,
+    pub preds: Vec<Pred>,
+}
+
+#[derive(Clone, Debug)]
 pub enum MemState {
     Concrete(MemConcrete),
     Map(MemMap),
@@ -170,13 +184,13 @@ pub enum MemState {
     Multi(MemMulti),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemConcrete {
     pub m: HashMap<Addr, Word>,
     pub max: Addr,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemMap {
     /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
     /// `Term`.  The `u8` gives the index of the byte in little-endian order.
@@ -184,12 +198,12 @@ pub struct MemMap {
     pub max: Addr,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemSnapshot {
     pub base: Addr,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemLog {
     pub l: Vec<(Term, Term)>,
 }
@@ -201,7 +215,7 @@ pub struct MemLog {
 /// `MemState`.  This allows things like using `MemConcrete` in a symbolic-base `objs` entry: the
 /// symbolic base address is subtracted out, and the `MemConcrete` is accessed only at a concrete
 /// offset.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemMulti {
     /// Memory regions with concrete bounds.  Each entry is `(start, end, mem)`.
     pub conc: Vec<(u64, u64, MemState)>,
@@ -213,7 +227,7 @@ pub struct MemMulti {
 }
 
 
-trait Memory {
+pub trait Memory {
     /// Store to a concrete address.
     fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String>;
     fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String>;
@@ -307,12 +321,14 @@ impl Memory for MemMulti {
 
 impl State {
     pub fn new(
+        var_counter: VarCounter,
         pc: Word,
         regs: [Term; NUM_REGS],
         mem: MemState,
         preds: Vec<Pred>,
     ) -> State {
-        State { pc, regs, mem, preds }
+        // TODO: make sure var_counter and VarIds in terms match up
+        State { var_counter, pc, regs, mem, preds }
     }
 
     pub fn pc(&self) -> Word {
@@ -335,195 +351,14 @@ impl State {
         self.regs[reg as usize].clone()
     }
 
-    fn operand_value(&self, op: Operand) -> Term {
+    pub fn operand_value(&self, op: Operand) -> Term {
         match op {
             Operand::Reg(r) => self.reg_value(r),
             Operand::Imm(i) => Term::const_(i),
         }
     }
 
-    fn set_reg(&mut self, reg: Reg, val: Term) {
+    pub fn set_reg(&mut self, reg: Reg, val: Term) {
         self.regs[reg as usize] = val;
-    }
-
-    /// Handle a simple instruction that has no preconditions.
-    pub fn rule_step_simple(&mut self, instr: Instr) -> Result<(), String> {
-        let x = self.reg_value(instr.r1);
-        let y = self.operand_value(instr.op2);
-
-        match instr.opcode {
-            Opcode::Binary(b) => {
-                let z = Term::binary(b, x, y);
-                self.set_reg(instr.rd, z);
-            },
-            Opcode::Not => {
-                self.set_reg(instr.rd, Term::not(y));
-            },
-            Opcode::Mov => {
-                self.set_reg(instr.rd, y);
-            },
-            Opcode::Cmov => {
-                let old = self.reg_value(instr.rd);
-                let z = Term::mux(x, y, old);
-                self.set_reg(instr.rd, z);
-            },
-
-            Opcode::Jmp => Err("can't use step_simple for Jmp")?,
-            Opcode::Cjmp => Err("can't use step_simple for Cjmp")?,
-            Opcode::Cnjmp => Err("can't use step_simple for Cnjmp")?,
-
-            Opcode::Store(w) => Err("can't use step_simple for Store")?,
-            Opcode::Load(w) => Err("can't use step_simple for Load")?,
-            Opcode::Poison(w) => Err("can't use step_simple for Poison")?,
-
-            Opcode::Answer => {
-                return Ok(());
-            },
-            Opcode::Advise => Err("can't use step_simple for Advise")?,
-        }
-
-        self.pc += 1;
-        Ok(())
-    }
-
-    /// Handle a jump instruction with a concrete destination and/or condition.
-    pub fn rule_step_jmp_concrete(&mut self, instr: Instr) -> Result<(), String> {
-        let x = self.reg_value(instr.r1);
-        let y = self.operand_value(instr.op2);
-
-        match instr.opcode {
-            Opcode::Jmp => {
-                // Always taken; dest must be concrete.
-                self.pc = y.as_const_or_err()?;
-            },
-            Opcode::Cjmp => {
-                // Conditionally taken; the condition must be concrete, and if the branch is taken,
-                // then the dest must be concrete.
-                if x.as_const_or_err()? != 0 {
-                    self.pc = y.as_const_or_err()
-                        .map_err(|e| format!("when evaluating dest: {e}"))?;
-                } else {
-                    self.pc += 1;
-                }
-            },
-            Opcode::Cnjmp => {
-                if x.as_const_or_err()? == 0 {
-                    self.pc = y.as_const_or_err()
-                        .map_err(|e| format!("when evaluating dest: {e}"))?;
-                } else {
-                    self.pc += 1;
-                }
-            },
-            op => Err(format!("can't use step_jmp_concrete for {:?}", op))?,
-        }
-
-        Ok(())
-    }
-
-    /// Handle a memory instruction that accesses a concrete address and falls within a concrete
-    /// memory region.
-    pub fn rule_step_mem_concrete(&mut self, instr: Instr) -> Result<(), String> {
-        let x = self.reg_value(instr.r1);
-        let y = self.operand_value(instr.op2);
-
-        let addr = y.as_const_or_err()
-            .map_err(|e| format!("when evaluating addr: {e}"))?;
-
-        match instr.opcode {
-            Opcode::Store(w) |
-            Opcode::Poison(w) => {
-                self.mem.store_concrete(w, addr, x)?;
-            },
-
-            Opcode::Load(w) => {
-                let z = self.mem.load_concrete(w, addr)?;
-                self.set_reg(instr.rd, z);
-            },
-
-            op => Err(format!("can't use step_mem_concrete for {:?}", op))?,
-        }
-
-        self.pc += 1;
-        Ok(())
-    }
-
-    pub fn tactic_step_concrete(&mut self, instr: Instr) -> Result<(), String> {
-        match instr.opcode {
-            Opcode::Binary(_) |
-            Opcode::Not |
-            Opcode::Mov |
-            Opcode::Cmov |
-            Opcode::Answer => self.rule_step_simple(instr),
-
-            Opcode::Jmp |
-            Opcode::Cjmp |
-            Opcode::Cnjmp => self.rule_step_jmp_concrete(instr),
-
-            Opcode::Store(_) |
-            Opcode::Poison(_) |
-            Opcode::Load(_) => self.rule_step_mem_concrete(instr),
-
-            op => Err(format!("can't use step_concrete for {:?}", op)),
-        }
-    }
-
-    /// Take as many steps as possible with `tactic_step_concrete`.  Stops running when
-    /// `tactic_step_concrete` returns an error.  The error from `tactic_step_concrete` is
-    /// discarded; this method only returns `Err` if `self.pc` goes outside of `prog`.
-    pub fn tactic_run_concrete(&mut self, prog: &HashMap<Addr, Instr>) -> Result<(), String> {
-        loop {
-            let pc = self.pc;
-            let instr = prog.get(&pc).copied()
-                .ok_or_else(|| format!("program executed out of bounds at {}", pc))?;
-            if instr.opcode == Opcode::Answer {
-                break;
-            }
-            let r = self.tactic_step_concrete(instr);
-            if r.is_err() {
-                break;
-            }
-            eprintln!("run[{}]: {:?}", pc, instr);
-        }
-        Ok(())
-    }
-
-    pub fn admit(&mut self, pred: Pred) {
-        self.preds.push(pred);
-    }
-
-    pub fn rule_rewrite_reg(&mut self, reg: Reg, t: Term) -> Result<(), String> {
-        let reg_val = self.reg_value(reg);
-        let need_pred = Pred::Eq(reg_val.clone(), t.clone());
-        if !self.preds.contains(&need_pred) {
-            return Err(format!("missing precondition: {} == {}", reg_val, t));
-        }
-        self.set_reg(reg, t);
-        Ok(())
-    }
-
-    pub fn tactic_step_jmp_taken(&mut self, instr: Instr) -> Result<(), String> {
-        match instr.opcode {
-            Opcode::Cjmp => {
-                self.rule_rewrite_reg(instr.r1, Term::const_(1))?;
-            },
-            Opcode::Cnjmp => {
-                self.rule_rewrite_reg(instr.r1, Term::const_(0))?;
-            },
-            _ => {},
-        }
-        self.rule_step_jmp_concrete(instr)
-    }
-
-    pub fn tactic_step_jmp_not_taken(&mut self, instr: Instr) -> Result<(), String> {
-        match instr.opcode {
-            Opcode::Cjmp => {
-                self.rule_rewrite_reg(instr.r1, Term::const_(0))?;
-            },
-            Opcode::Cnjmp => {
-                self.rule_rewrite_reg(instr.r1, Term::const_(1))?;
-            },
-            _ => {},
-        }
-        self.rule_step_jmp_concrete(instr)
     }
 }
