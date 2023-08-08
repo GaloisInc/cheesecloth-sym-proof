@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 use crate::Addr;
-use crate::symbolic::{State, Term, Pred, Memory, VarCounter};
+use crate::symbolic::{State, Term, Pred, Memory, VarCounter, Subst};
 use crate::micro_ram::{Instr, Opcode, Reg};
 
 
@@ -10,10 +10,28 @@ pub enum Prop {
     Step(StepProp),
 }
 
-/// There exist `x0 ... xN` (`vars`) such that:
-/// * `preds` hold, and
-/// * for every concrete state `s` such that `pre(s)` holds, there exists some `M` and `s'` such
-///   that `s ->M s'` and `post(s')` holds.
+impl Prop {
+    pub fn as_step(&self) -> Result<&StepProp, String> {
+        match *self {
+            Prop::Step(ref p) => Ok(p),
+            ref prop => Err(format!("expected Prop::Step, but got {:?}", prop)),
+        }
+    }
+
+    pub fn as_step_mut(&mut self) -> Result<&mut StepProp, String> {
+        match *self {
+            Prop::Step(ref mut p) => Ok(p),
+            ref prop => Err(format!("expected Prop::Step, but got {:?}", prop)),
+        }
+    }
+}
+
+
+/// For all `x0 ... xN` (`vars`) such that `preds` hold, and for every concrete state `s` such that
+/// `pre(s)` holds, there exists some `M` and `s'` such that `s ->M s'` and `post(s')` holds.
+///
+/// Note this is a total correctness statement, not partial correctness, because we require that a
+/// valid post state exists and is reachable in a finite number of steps.
 #[derive(Clone, Debug)]
 pub struct StepProp {
     vars: VarCounter,
@@ -106,11 +124,64 @@ impl Proof {
         id: LemmaId,
         f: impl FnOnce(StepProof) -> Result<R, String>,
     ) -> Result<R, String> {
-        let p = match self.lemmas[id] {
-            Prop::Step(ref mut p) => p,
-            ref prop => panic!("expected Prop::Step, but got {:?}", prop),
-        };
+        let p = self.lemmas[id].as_step_mut()?;
         f(StepProof { prog: &self.prog, p })
+    }
+
+    /// Sequentially compose two `Prop::Step` lemmas.
+    pub fn rule_step_seq<S1: Subst, S2: Subst>(
+        &mut self,
+        id1: LemmaId,
+        id2: LemmaId,
+        mk_substs: impl FnOnce(&mut VarCounter) -> (S1, S2),
+    ) -> Result<LemmaId, String> {
+        let p1 = self.lemmas[id1].as_step()?;
+        let p2 = self.lemmas[id2].as_step()?;
+        let s1 = &p1.post;
+        let s2 = &p2.pre;
+
+        let mut vars = VarCounter::new();
+        let (mut subst1, mut subst2) = mk_substs(&mut vars);
+
+        if s1.pc != s2.pc {
+            return Err(format!(
+                "middle state 1 has pc = {}, but middle state 2 has pc = {}",
+                s1.pc, s2.pc,
+            ));
+        }
+
+        for (i, (r1, r2)) in s1.regs.iter().zip(s2.regs.iter()).enumerate() {
+            if !Term::check_eq_subst(r1, &mut subst1, r2, &mut subst2) {
+                return Err(format!(
+                    "after substitution, middle state 1 has r{} = {}, \
+                    but middle state 2 has r{} = {} (eq? {})",
+                    i, r1.subst(&mut subst1).clone(), i, r2.subst(&mut subst2).clone(),
+                    r1.subst(&mut subst1).clone() == r2.subst(&mut subst2).clone(),
+                ));
+            }
+        }
+
+        if !Term::check_eq_subst(&s1.cycle, &mut subst1, &s2.cycle, &mut subst2) {
+            return Err(format!(
+                "after substitution, middle state 1 has cycle = {}, \
+                but middle state 2 has cycle = {}",
+                s1.cycle.subst(&mut subst1), s2.cycle.subst(&mut subst2),
+            ));
+        }
+
+        // FIXME: check equality of `s1.mem` and `s2.mem`
+        eprintln!("ADMITTED: rule_step_seq memory equivalence");
+
+        let preds = p1.preds.iter().map(|p| p.subst(&mut subst1))
+            .chain(p2.preds.iter().map(|p| p.subst(&mut subst2)))
+            .collect::<Vec<_>>();
+
+        Ok(self.add_lemma(Prop::Step(StepProp {
+            vars,
+            preds,
+            pre: p1.pre.subst(&mut subst1),
+            post: p2.post.subst(&mut subst2),
+        })))
     }
 }
 
@@ -366,6 +437,11 @@ impl StepProof<'_> {
         }
         self.p.post.set_reg(reg, t);
         Ok(())
+    }
+
+    /// Replace the value of `reg` with a fresh symbolic variable.
+    pub fn rule_forget_reg(&mut self, reg: Reg) {
+        self.p.post.set_reg(reg, self.p.vars.var());
     }
 
     pub fn tactic_step_jmp_taken(&mut self) -> Result<(), String> {

@@ -1,3 +1,4 @@
+use std::array;
 use std::collections::HashMap;
 use std::fmt::{self, Write as _};
 use std::rc::Rc;
@@ -95,6 +96,65 @@ impl Term {
         }
         Term::add(a, Term::const_(n))
     }
+
+    pub fn subst<S: Subst>(&self, subst: &mut S) -> Term {
+        if S::IS_IDENTITY {
+            return self.clone();
+        }
+
+        match self.0 {
+            TermInner::Var(v) => subst.subst(v).clone(),
+            TermInner::Const(x) => Term::const_(x),
+            TermInner::Not(ref a) => Term::not(a.subst(subst)),
+            TermInner::Binary(op, ref ab) => {
+                let (ref a, ref b) = **ab;
+                Term::binary(op, a.subst(subst), b.subst(subst))
+            },
+            TermInner::Mux(ref abc) => {
+                let (ref a, ref b, ref c) = **abc;
+                Term::mux(a.subst(subst), b.subst(subst), c.subst(subst))
+            },
+        }
+    }
+
+    /// Substitute the variables of `a` using `a_subst`, substitute the variables of `b` using
+    /// `b_subst`, and check if the resulting terms are equal.  This avoids constructing the
+    /// intermediate terms when possible.
+    pub fn check_eq_subst<AS, BS>(a: &Term, a_subst: &mut AS, b: &Term, b_subst: &mut BS) -> bool
+    where AS: Subst, BS: Subst {
+        match (&a.0, &b.0) {
+            // Substitution cases.  We skip calling `subst` when `IS_IDENTITY` is set.
+            (&TermInner::Var(av), &TermInner::Var(bv)) if !AS::IS_IDENTITY && !BS::IS_IDENTITY => {
+                a_subst.subst(av) == b_subst.subst(bv)
+            },
+            (&TermInner::Var(av), _) if !AS::IS_IDENTITY =>
+                Term::check_eq_subst(a_subst.subst(av), &mut IdentitySubsts::new(), b, b_subst),
+            (_, &TermInner::Var(bv)) if !BS::IS_IDENTITY =>
+                Term::check_eq_subst(a, a_subst, b_subst.subst(bv), &mut IdentitySubsts::new()),
+
+            (&TermInner::Const(ax), &TermInner::Const(bx)) => ax == bx,
+            // This `Var` case is only reachable when both `Subst`s are the identity.
+            (&TermInner::Var(av), &TermInner::Var(bv)) => av == bv,
+            (&TermInner::Not(ref at), &TermInner::Not(ref bt)) =>
+                Term::check_eq_subst(at, a_subst, bt, b_subst),
+            (&TermInner::Binary(a_op, ref ats), &TermInner::Binary(b_op, ref bts)) => {
+                let (ref at1, ref at2) = **ats;
+                let (ref bt1, ref bt2) = **bts;
+                a_op == b_op
+                    && Term::check_eq_subst(at1, a_subst, bt1, b_subst)
+                    && Term::check_eq_subst(at2, a_subst, bt2, b_subst)
+            },
+            (&TermInner::Mux(ref ats), &TermInner::Mux(ref bts)) => {
+                let (ref at1, ref at2, ref at3) = **ats;
+                let (ref bt1, ref bt2, ref bt3) = **bts;
+                Term::check_eq_subst(at1, a_subst, bt1, b_subst)
+                    && Term::check_eq_subst(at2, a_subst, bt2, b_subst)
+                    && Term::check_eq_subst(at3, a_subst, bt3, b_subst)
+            },
+
+            _ => false,
+        }
+    }
 }
 
 impl From<Word> for Term {
@@ -141,6 +201,59 @@ impl fmt::Display for TermInner {
 }
 
 
+pub trait Subst {
+    const IS_IDENTITY: bool;
+    fn subst(&mut self, v: VarId) -> &Term;
+}
+
+pub struct IdentitySubsts {
+    storage: Term,
+}
+
+impl IdentitySubsts {
+    pub fn new() -> IdentitySubsts {
+        IdentitySubsts {
+            storage: Term(TermInner::Var(0)),
+        }
+    }
+}
+
+impl Subst for IdentitySubsts {
+    const IS_IDENTITY: bool = true;
+    fn subst(&mut self, v: VarId) -> &Term {
+        self.storage = Term(TermInner::Var(v));
+        &self.storage
+    }
+}
+
+pub struct SubstTable<F> {
+    cache: Vec<Option<Term>>,
+    f: F,
+}
+
+impl<F> SubstTable<F> {
+    pub fn new(f: F) -> SubstTable<F> {
+        SubstTable {
+            cache: Vec::new(),
+            f,
+        }
+    }
+}
+
+impl<F: FnMut(VarId) -> Term> Subst for SubstTable<F> {
+    const IS_IDENTITY: bool = false;
+    fn subst(&mut self, v: VarId) -> &Term {
+        if v >= self.cache.len() {
+            self.cache.resize_with(v + 1, || None);
+        }
+        if self.cache[v].is_none() {
+            self.cache[v] = Some((self.f)(v));
+        }
+        self.cache[v].as_ref().unwrap()
+    }
+}
+
+
 #[derive(Clone, Debug)]
 pub struct VarCounter(VarId);
 
@@ -163,6 +276,44 @@ pub enum Pred {
     Eq(Term, Term),
     /// `start <= x < end`
     InRange { x: Term, start: Term, end: Term },
+}
+
+impl Pred {
+    pub fn subst<S: Subst>(&self, subst: &mut S) -> Pred {
+        if S::IS_IDENTITY {
+            return self.clone();
+        }
+
+        match *self {
+            Pred::Nonzero(ref t) => Pred::Nonzero(t.subst(subst)),
+            Pred::Eq(ref a, ref b) => Pred::Eq(a.subst(subst), b.subst(subst)),
+            Pred::InRange { ref x, ref start, ref end } => Pred::InRange {
+                x: x.subst(subst),
+                start: start.subst(subst),
+                end: end.subst(subst),
+            },
+        }
+    }
+
+    pub fn check_eq_subst<AS, BS>(a: &Pred, a_subst: &mut AS, b: &Pred, b_subst: &mut BS) -> bool
+    where AS: Subst, BS: Subst {
+        match (a, b) {
+            (&Pred::Nonzero(ref a1), &Pred::Nonzero(ref b1)) =>
+                Term::check_eq_subst(a1, a_subst, b1, b_subst),
+            (&Pred::Eq(ref a1, ref a2), &Pred::Eq(ref b1, ref b2)) =>
+                Term::check_eq_subst(a1, a_subst, b1, b_subst)
+                    && Term::check_eq_subst(a2, a_subst, b2, b_subst),
+            (
+                &Pred::InRange { x: ref a1, start: ref a2, end: ref a3 },
+                &Pred::InRange { x: ref b1, start: ref b2, end: ref b3 },
+            ) =>
+                Term::check_eq_subst(a1, a_subst, b1, b_subst)
+                    && Term::check_eq_subst(a2, a_subst, b2, b_subst)
+                    && Term::check_eq_subst(a3, a_subst, b3, b_subst),
+
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for Pred {
@@ -442,5 +593,21 @@ impl State {
 
     pub fn increment_cycle(&mut self) {
         self.cycle = Term::increment(self.cycle.clone(), 1);
+    }
+
+    pub fn subst<S: Subst>(&self, subst: &mut S) -> State {
+        if S::IS_IDENTITY {
+            return self.clone();
+        }
+
+        // FIXME: substitute mem
+        eprintln!("ADMITTED: State::subst memory substitution");
+
+        State {
+            pc: self.pc,
+            cycle: self.cycle.subst(subst),
+            regs: array::from_fn(|i| self.regs[i].subst(subst)),
+            mem: self.mem.clone(),
+        }
     }
 }
