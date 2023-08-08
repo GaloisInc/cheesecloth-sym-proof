@@ -62,6 +62,7 @@ fn run(path: &str) -> Result<(), String> {
     let mem = MemState::Log(MemLog { l: Vec::new() });
     let state = State::new(
         conc_state.pc,
+        v.var(),
         regs.clone(),
         mem,
     );
@@ -97,6 +98,7 @@ fn run(path: &str) -> Result<(), String> {
     for i in 0 .. NUM_REGS {
         eprintln!("{:2}: {} -> {}", i, loop_start.regs()[i], loop_end.regs()[i]);
     }
+    eprintln!("cycle: {} -> {}", loop_start.cycle(), loop_end.cycle());
 
     Ok(())
 }

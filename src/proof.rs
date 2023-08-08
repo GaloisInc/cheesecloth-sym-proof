@@ -190,6 +190,7 @@ impl StepProof<'_> {
 
         eprintln!("run {}: {:?} (simple)", self.pc, instr);
         self.p.post.pc += 1;
+        self.p.post.increment_cycle();
         Ok(())
     }
 
@@ -227,6 +228,7 @@ impl StepProof<'_> {
         }
 
         eprintln!("run {}: {:?} (jmp_concrete)", old_pc, instr);
+        self.p.post.increment_cycle();
         Ok(())
     }
 
@@ -256,6 +258,7 @@ impl StepProof<'_> {
 
         eprintln!("run {}: {:?} (mem_concrete)", self.pc, instr);
         self.p.post.pc += 1;
+        self.p.post.increment_cycle();
         Ok(())
     }
 
@@ -281,6 +284,7 @@ impl StepProof<'_> {
 
         eprintln!("run {}: {:?} (mem_symbolic)", self.pc, instr);
         self.p.post.pc += 1;
+        self.p.post.increment_cycle();
         Ok(())
     }
 
@@ -300,6 +304,7 @@ impl StepProof<'_> {
 
         eprintln!("run {}: {:?} (mem_load_fresh)", self.pc, instr);
         self.p.post.pc += 1;
+        self.p.post.increment_cycle();
         Ok(())
     }
 

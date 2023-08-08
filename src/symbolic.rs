@@ -83,6 +83,18 @@ impl Term {
     pub fn cmpae(a: Term, b: Term) -> Term { Term::binary(BinOp::Cmpae, a, b) }
     pub fn cmpg(a: Term, b: Term) -> Term { Term::binary(BinOp::Cmpg, a, b) }
     pub fn cmpge(a: Term, b: Term) -> Term { Term::binary(BinOp::Cmpge, a, b) }
+
+    /// Build the term `a + n`.  If `a` has the form `b + m` where `m` is a constant, this folds
+    /// the two additions together into `b + (n + m)`.
+    pub fn increment(a: Term, n: Word) -> Term {
+        if let TermInner::Binary(BinOp::Add, ref args) = a.0 {
+            let (ref b, ref m) = **args;
+            if let Some(m) = m.as_const() {
+                return Term::add(b.clone(), Term::const_(n + m));
+            }
+        }
+        Term::add(a, Term::const_(n))
+    }
 }
 
 impl From<Word> for Term {
@@ -382,6 +394,7 @@ impl Memory for MemMulti {
 #[derive(Clone, Debug)]
 pub struct State {
     pub pc: Word,
+    pub cycle: Term,
     pub regs: [Term; NUM_REGS],
     pub mem: MemState,
 }
@@ -389,14 +402,19 @@ pub struct State {
 impl State {
     pub fn new(
         pc: Word,
+        cycle: Term,
         regs: [Term; NUM_REGS],
         mem: MemState,
     ) -> State {
-        State { pc, regs, mem }
+        State { pc, cycle, regs, mem }
     }
 
     pub fn pc(&self) -> Word {
         self.pc
+    }
+
+    pub fn cycle(&self) -> &Term {
+        &self.cycle
     }
 
     pub fn regs(&self) -> &[Term; NUM_REGS] {
@@ -420,5 +438,9 @@ impl State {
 
     pub fn set_reg(&mut self, reg: Reg, val: Term) {
         self.regs[reg as usize] = val;
+    }
+
+    pub fn increment_cycle(&mut self) {
+        self.cycle = Term::increment(self.cycle.clone(), 1);
     }
 }
