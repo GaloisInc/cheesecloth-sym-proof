@@ -165,23 +165,6 @@ impl fmt::Display for Pred {
 }
 
 
-/// A predicate on program states.  The predicate is parameterized over some variables `xs`, which
-/// can be referenced using `Term::var` in the register or memory `Term`s.
-///
-/// A concrete state `s` satisfies the predicate when:
-/// * `s.pc == self.pc`, and
-/// * for all `i`, `s.regs[i] == eval(self.regs[i], xs)`, and
-/// * `s.mem` satisfies the predicate `self.mem`.
-///
-/// TODO: Clarify details of the memory predicate
-#[derive(Clone, Debug)]
-pub struct State {
-    pub pc: Word,
-    pub regs: [Term; NUM_REGS],
-    pub mem: MemState,
-}
-
-
 pub trait Memory {
     /// Store to a concrete address.
     fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String>;
@@ -386,6 +369,22 @@ impl Memory for MemMulti {
     }
 }
 
+
+/// A predicate on program states.  The predicate is parameterized over some variables `xs`, which
+/// can be referenced using `Term::var` in the register or memory `Term`s.
+///
+/// A concrete state `s` satisfies the predicate when:
+/// * `s.pc == self.pc`, and
+/// * for all `i`, `s.regs[i] == eval(self.regs[i], xs)`, and
+/// * `s.mem` satisfies the predicate `self.mem`.
+///
+/// TODO: Clarify details of the memory predicate
+#[derive(Clone, Debug)]
+pub struct State {
+    pub pc: Word,
+    pub regs: [Term; NUM_REGS],
+    pub mem: MemState,
+}
 
 impl State {
     pub fn new(
