@@ -71,10 +71,12 @@ fn run(path: &str) -> Result<(), String> {
     pf.rule_step_extend(l_step, |mut spf| {
         // Step over the condition check `cmpe` + `cnjmp`
         spf.tactic_step_concrete()?;
-        spf.admit(Pred::Eq(
-            Term::cmpe(regs[12].clone(), 0.into()),
-            0.into(),
-        ));
+        spf.rule_derive_pred(|ppf| {
+            ppf.admit(Pred::Eq(
+                Term::cmpe(regs[12].clone(), 0.into()),
+                0.into(),
+            ));
+        });
         spf.tactic_step_jmp_taken()?;
 
         // Run the loop body.

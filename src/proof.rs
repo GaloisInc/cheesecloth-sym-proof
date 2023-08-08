@@ -128,6 +128,21 @@ impl Deref for StepProof<'_> {
 }
 
 impl StepProof<'_> {
+    /// Add a new predicate.  This becomes part of the precondition for applying this `Prop::Step`.
+    ///
+    /// The same effect can be achieved by including the predicate in the initial `preds` list when
+    /// creating the `Prop::Step`.
+    pub fn rule_add_preds(&mut self, pred: Pred) {
+        self.p.preds.push(pred);
+    }
+
+    // There is no "weakening" rule for removing a predicate, since we don't know which predicates
+    // were used to establish correctness of various CPU steps.
+
+    pub fn rule_derive_pred(&mut self, f: impl FnOnce(&mut PredProof)) {
+        f(&mut PredProof { preds: &mut self.p.preds });
+    }
+
     fn fetch_instr(&self) -> Result<Instr, String> {
         let pc = self.p.post.pc;
         self.prog.get(&pc).cloned()
@@ -338,11 +353,6 @@ impl StepProof<'_> {
         Ok(())
     }
 
-    pub fn admit(&mut self, pred: Pred) {
-        eprintln!("ADMITTED: {}", pred);
-        self.p.preds.push(pred);
-    }
-
     pub fn rule_rewrite_reg(&mut self, reg: Reg, t: Term) -> Result<(), String> {
         let reg_val = self.p.post.reg_value(reg);
         let need_pred = Pred::Eq(reg_val.clone(), t.clone());
@@ -380,4 +390,19 @@ impl StepProof<'_> {
         }
         self.rule_step_jmp_concrete()
     }
+}
+
+
+/// Helper for proving new predicates given some set of existing ones.
+pub struct PredProof<'a> {
+    preds: &'a mut Vec<Pred>,
+}
+
+impl PredProof<'_> {
+    pub fn admit(&mut self, pred: Pred) {
+        eprintln!("ADMITTED: {}", pred);
+        self.preds.push(pred);
+    }
+
+    // TODO: add proper derivation rules
 }
