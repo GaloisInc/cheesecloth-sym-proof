@@ -61,14 +61,13 @@ fn run(path: &str) -> Result<(), String> {
     */
     let mem = MemState::Log(MemLog { l: Vec::new() });
     let state = State::new(
-        v,
         conc_state.pc,
         regs.clone(),
         mem,
-        Vec::new(),
     );
+    let mut preds = Vec::new();
 
-    let l_step = pf.rule_step_zero(state);
+    let l_step = pf.rule_step_zero(v, preds, state);
     pf.rule_step_extend(l_step, |mut spf| {
         // Step over the condition check `cmpe` + `cnjmp`
         spf.tactic_step_concrete()?;
@@ -90,7 +89,7 @@ fn run(path: &str) -> Result<(), String> {
     })?;
 
     let (loop_start, loop_end) = match *pf.lemma(l_step) {
-        Prop::Step(ref a, ref b) => (a, b),
+        Prop::Step(ref p) => (p.pre(), p.post()),
     };
 
     for i in 0 .. NUM_REGS {

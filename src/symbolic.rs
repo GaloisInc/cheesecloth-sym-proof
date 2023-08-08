@@ -165,14 +165,20 @@ impl fmt::Display for Pred {
 }
 
 
-
+/// A predicate on program states.  The predicate is parameterized over some variables `xs`, which
+/// can be referenced using `Term::var` in the register or memory `Term`s.
+///
+/// A concrete state `s` satisfies the predicate when:
+/// * `s.pc == self.pc`, and
+/// * for all `i`, `s.regs[i] == eval(self.regs[i], xs)`, and
+/// * `s.mem` satisfies the predicate `self.mem`.
+///
+/// TODO: Clarify details of the memory predicate
 #[derive(Clone, Debug)]
 pub struct State {
-    pub var_counter: VarCounter,
     pub pc: Word,
     pub regs: [Term; NUM_REGS],
     pub mem: MemState,
-    pub preds: Vec<Pred>,
 }
 
 
@@ -383,14 +389,11 @@ impl Memory for MemMulti {
 
 impl State {
     pub fn new(
-        var_counter: VarCounter,
         pc: Word,
         regs: [Term; NUM_REGS],
         mem: MemState,
-        preds: Vec<Pred>,
     ) -> State {
-        // TODO: make sure var_counter and VarIds in terms match up
-        State { var_counter, pc, regs, mem, preds }
+        State { pc, regs, mem }
     }
 
     pub fn pc(&self) -> Word {
@@ -403,10 +406,6 @@ impl State {
 
     pub fn mem(&self) -> &MemState {
         &self.mem
-    }
-
-    pub fn preds(&self) -> &[Pred] {
-        &self.preds
     }
 
     pub fn reg_value(&self, reg: Reg) -> Term {

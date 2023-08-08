@@ -1,13 +1,39 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 use crate::Addr;
-use crate::symbolic::{State, Term, Pred, Memory};
+use crate::symbolic::{State, Term, Pred, Memory, VarCounter};
 use crate::micro_ram::{Instr, Opcode, Reg};
 
 
 #[derive(Clone, Debug)]
 pub enum Prop {
-    Step(State, State),
+    Step(StepProp),
+}
+
+/// There exist `x0 ... xN` (`vars`) such that:
+/// * `preds` hold, and
+/// * for every concrete state `s` such that `pre(s)` holds, there exists some `M` and `s'` such
+///   that `s ->M s'` and `post(s')` holds.
+#[derive(Clone, Debug)]
+pub struct StepProp {
+    vars: VarCounter,
+    preds: Vec<Pred>,
+    pre: State,
+    post: State,
+}
+
+impl StepProp {
+    pub fn preds(&self) -> &[Pred] {
+        &self.preds
+    }
+
+    pub fn pre(&self) -> &State {
+        &self.pre
+    }
+
+    pub fn post(&self) -> &State {
+        &self.post
+    }
 }
 
 
@@ -62,8 +88,16 @@ impl Proof {
     }
 
     /// Introduce `{P} ->* {P}`.  Every state steps to itself in zero steps.
-    pub fn rule_step_zero(&mut self, state: State) -> LemmaId {
-        self.add_lemma(Prop::Step(state.clone(), state))
+    ///
+    /// All vars mentioned in `preds` and `state` must have been produced by `vars`.  Currently,
+    /// this is not checked.
+    pub fn rule_step_zero(&mut self, vars: VarCounter, preds: Vec<Pred>, state: State) -> LemmaId {
+        self.add_lemma(Prop::Step(StepProp {
+            vars,
+            preds,
+            pre: state.clone(),
+            post: state,
+        }))
     }
 
     /// Extend a `Prop::Step` lemma by adding more steps.
@@ -72,33 +106,30 @@ impl Proof {
         id: LemmaId,
         f: impl FnOnce(StepProof) -> Result<R, String>,
     ) -> Result<R, String> {
-        // We only allow editing the post state.  Editing the pre and post states together is
-        // difficult because there's no record in the `Prop::Step` of how the symbolic/existential
-        // variables of the pre state correspond to those of the post state.
-        let state = match self.lemmas[id] {
-            Prop::Step(_, ref mut state) => state,
+        let p = match self.lemmas[id] {
+            Prop::Step(ref mut p) => p,
             ref prop => panic!("expected Prop::Step, but got {:?}", prop),
         };
-        f(StepProof { prog: &self.prog, state })
+        f(StepProof { prog: &self.prog, p })
     }
 }
 
 
 pub struct StepProof<'a> {
     prog: &'a HashMap<u64, Instr>,
-    state: &'a mut State,
+    p: &'a mut StepProp,
 }
 
 impl Deref for StepProof<'_> {
     type Target = State;
     fn deref(&self) -> &State {
-        &*self.state
+        &self.p.post
     }
 }
 
 impl StepProof<'_> {
     fn fetch_instr(&self) -> Result<Instr, String> {
-        let pc = self.state.pc;
+        let pc = self.p.post.pc;
         self.prog.get(&pc).cloned()
             .ok_or_else(|| format!("program executed out of bounds at {}", pc))
     }
@@ -106,24 +137,24 @@ impl StepProof<'_> {
     /// Handle a simple instruction that has no preconditions.
     pub fn rule_step_simple(&mut self) -> Result<(), String> {
         let instr = self.fetch_instr()?;
-        let x = self.state.reg_value(instr.r1);
-        let y = self.state.operand_value(instr.op2);
+        let x = self.p.post.reg_value(instr.r1);
+        let y = self.p.post.operand_value(instr.op2);
 
         match instr.opcode {
             Opcode::Binary(b) => {
                 let z = Term::binary(b, x, y);
-                self.state.set_reg(instr.rd, z);
+                self.p.post.set_reg(instr.rd, z);
             },
             Opcode::Not => {
-                self.state.set_reg(instr.rd, Term::not(y));
+                self.p.post.set_reg(instr.rd, Term::not(y));
             },
             Opcode::Mov => {
-                self.state.set_reg(instr.rd, y);
+                self.p.post.set_reg(instr.rd, y);
             },
             Opcode::Cmov => {
                 let old = self.reg_value(instr.rd);
                 let z = Term::mux(x, y, old);
-                self.state.set_reg(instr.rd, z);
+                self.p.post.set_reg(instr.rd, z);
             },
 
             Opcode::Jmp => Err("can't use step_simple for Jmp")?,
@@ -143,38 +174,38 @@ impl StepProof<'_> {
         }
 
         eprintln!("run {}: {:?} (simple)", self.pc, instr);
-        self.state.pc += 1;
+        self.p.post.pc += 1;
         Ok(())
     }
 
     /// Handle a jump instruction with a concrete destination and/or condition.
     pub fn rule_step_jmp_concrete(&mut self) -> Result<(), String> {
         let instr = self.fetch_instr()?;
-        let old_pc = self.state.pc;
-        let x = self.state.reg_value(instr.r1);
-        let y = self.state.operand_value(instr.op2);
+        let old_pc = self.p.post.pc;
+        let x = self.p.post.reg_value(instr.r1);
+        let y = self.p.post.operand_value(instr.op2);
 
         match instr.opcode {
             Opcode::Jmp => {
                 // Always taken; dest must be concrete.
-                self.state.pc = y.as_const_or_err()?;
+                self.p.post.pc = y.as_const_or_err()?;
             },
             Opcode::Cjmp => {
                 // Conditionally taken; the condition must be concrete, and if the branch is taken,
                 // then the dest must be concrete.
                 if x.as_const_or_err()? != 0 {
-                    self.state.pc = y.as_const_or_err()
+                    self.p.post.pc = y.as_const_or_err()
                         .map_err(|e| format!("when evaluating dest: {e}"))?;
                 } else {
-                    self.state.pc += 1;
+                    self.p.post.pc += 1;
                 }
             },
             Opcode::Cnjmp => {
                 if x.as_const_or_err()? == 0 {
-                    self.state.pc = y.as_const_or_err()
+                    self.p.post.pc = y.as_const_or_err()
                         .map_err(|e| format!("when evaluating dest: {e}"))?;
                 } else {
-                    self.state.pc += 1;
+                    self.p.post.pc += 1;
                 }
             },
             op => Err(format!("can't use step_jmp_concrete for {:?}", op))?,
@@ -188,8 +219,8 @@ impl StepProof<'_> {
     /// memory region.
     pub fn rule_step_mem_concrete(&mut self) -> Result<(), String> {
         let instr = self.fetch_instr()?;
-        let x = self.state.reg_value(instr.r1);
-        let y = self.state.operand_value(instr.op2);
+        let x = self.p.post.reg_value(instr.r1);
+        let y = self.p.post.operand_value(instr.op2);
 
         let addr = y.as_const_or_err()
             .map_err(|e| format!("when evaluating addr: {e}"))?;
@@ -197,44 +228,44 @@ impl StepProof<'_> {
         match instr.opcode {
             Opcode::Store(w) |
             Opcode::Poison(w) => {
-                self.state.mem.store_concrete(w, addr, x)?;
+                self.p.post.mem.store_concrete(w, addr, x)?;
             },
 
             Opcode::Load(w) => {
-                let z = self.state.mem.load_concrete(w, addr)?;
-                self.state.set_reg(instr.rd, z);
+                let z = self.p.post.mem.load_concrete(w, addr)?;
+                self.p.post.set_reg(instr.rd, z);
             },
 
             op => Err(format!("can't use step_mem_concrete for {:?}", op))?,
         }
 
         eprintln!("run {}: {:?} (mem_concrete)", self.pc, instr);
-        self.state.pc += 1;
+        self.p.post.pc += 1;
         Ok(())
     }
 
     /// Handle a memory instruction that accesses a symbolic address but requires no preconditions.
     pub fn rule_step_mem_symbolic(&mut self) -> Result<(), String> {
         let instr = self.fetch_instr()?;
-        let x = self.state.reg_value(instr.r1);
-        let y = self.state.operand_value(instr.op2);
+        let x = self.p.post.reg_value(instr.r1);
+        let y = self.p.post.operand_value(instr.op2);
 
         match instr.opcode {
             Opcode::Store(w) |
             Opcode::Poison(w) => {
-                self.state.mem.store(w, y, x)?;
+                self.p.post.mem.store(w, y, x)?;
             },
 
             Opcode::Load(w) => {
-                let z = self.state.mem.load(w, y)?;
-                self.state.set_reg(instr.rd, z);
+                let z = self.p.post.mem.load(w, y)?;
+                self.p.post.set_reg(instr.rd, z);
             },
 
             op => Err(format!("can't use step_mem_symbolic for {:?}", op))?,
         }
 
         eprintln!("run {}: {:?} (mem_symbolic)", self.pc, instr);
-        self.state.pc += 1;
+        self.p.post.pc += 1;
         Ok(())
     }
 
@@ -245,15 +276,15 @@ impl StepProof<'_> {
 
         match instr.opcode {
             Opcode::Load(w) => {
-                let z = self.state.var_counter.var();
-                self.state.set_reg(instr.rd, z);
+                let z = self.p.vars.var();
+                self.p.post.set_reg(instr.rd, z);
             },
 
             op => Err(format!("can't use step_mem_load_fresh for {:?}", op))?,
         }
 
         eprintln!("run {}: {:?} (mem_load_fresh)", self.pc, instr);
-        self.state.pc += 1;
+        self.p.post.pc += 1;
         Ok(())
     }
 
@@ -296,11 +327,11 @@ impl StepProof<'_> {
     }
 
     pub fn tactic_run_concrete_until(&mut self, pc: Addr) -> Result<(), String> {
-        while self.state.pc != pc {
+        while self.p.post.pc != pc {
             let instr = self.fetch_instr()?;
             if instr.opcode == Opcode::Answer {
                 return Err(format!("encountered Answer at {} before reaching pc = {}",
-                    self.state.pc, pc));
+                    self.p.post.pc, pc));
             }
             self.tactic_step_concrete()?;
         }
@@ -309,16 +340,16 @@ impl StepProof<'_> {
 
     pub fn admit(&mut self, pred: Pred) {
         eprintln!("ADMITTED: {}", pred);
-        self.state.preds.push(pred);
+        self.p.preds.push(pred);
     }
 
     pub fn rule_rewrite_reg(&mut self, reg: Reg, t: Term) -> Result<(), String> {
-        let reg_val = self.state.reg_value(reg);
+        let reg_val = self.p.post.reg_value(reg);
         let need_pred = Pred::Eq(reg_val.clone(), t.clone());
-        if !self.state.preds.contains(&need_pred) {
+        if !self.p.preds.contains(&need_pred) {
             return Err(format!("missing precondition: {} == {}", reg_val, t));
         }
-        self.state.set_reg(reg, t);
+        self.p.post.set_reg(reg, t);
         Ok(())
     }
 
