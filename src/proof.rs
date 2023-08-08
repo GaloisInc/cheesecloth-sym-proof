@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ops::Deref;
+use crate::Addr;
 use crate::symbolic::{State, Term, Pred, Memory};
 use crate::micro_ram::{Instr, Opcode, Reg};
 
@@ -212,6 +213,50 @@ impl StepProof<'_> {
         Ok(())
     }
 
+    /// Handle a memory instruction that accesses a symbolic address but requires no preconditions.
+    pub fn rule_step_mem_symbolic(&mut self) -> Result<(), String> {
+        let instr = self.fetch_instr()?;
+        let x = self.state.reg_value(instr.r1);
+        let y = self.state.operand_value(instr.op2);
+
+        match instr.opcode {
+            Opcode::Store(w) |
+            Opcode::Poison(w) => {
+                self.state.mem.store(w, y, x)?;
+            },
+
+            Opcode::Load(w) => {
+                let z = self.state.mem.load(w, y)?;
+                self.state.set_reg(instr.rd, z);
+            },
+
+            op => Err(format!("can't use step_mem_symbolic for {:?}", op))?,
+        }
+
+        eprintln!("run {}: {:?} (mem_symbolic)", self.pc, instr);
+        self.state.pc += 1;
+        Ok(())
+    }
+
+    /// Handle a load instruction by introducing a fresh variable for the result.  This gives no
+    /// information about the value that was actually loaded.
+    pub fn rule_step_mem_load_fresh(&mut self) -> Result<(), String> {
+        let instr = self.fetch_instr()?;
+
+        match instr.opcode {
+            Opcode::Load(w) => {
+                let z = self.state.var_counter.var();
+                self.state.set_reg(instr.rd, z);
+            },
+
+            op => Err(format!("can't use step_mem_load_fresh for {:?}", op))?,
+        }
+
+        eprintln!("run {}: {:?} (mem_load_fresh)", self.pc, instr);
+        self.state.pc += 1;
+        Ok(())
+    }
+
     pub fn tactic_step_concrete(&mut self) -> Result<(), String> {
         let instr = self.fetch_instr()?;
         match instr.opcode {
@@ -246,6 +291,18 @@ impl StepProof<'_> {
             if r.is_err() {
                 break;
             }
+        }
+        Ok(())
+    }
+
+    pub fn tactic_run_concrete_until(&mut self, pc: Addr) -> Result<(), String> {
+        while self.state.pc != pc {
+            let instr = self.fetch_instr()?;
+            if instr.opcode == Opcode::Answer {
+                return Err(format!("encountered Answer at {} before reaching pc = {}",
+                    self.state.pc, pc));
+            }
+            self.tactic_step_concrete()?;
         }
         Ok(())
     }

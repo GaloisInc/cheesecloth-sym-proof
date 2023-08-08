@@ -205,7 +205,7 @@ pub struct MemSnapshot {
 
 #[derive(Clone, Debug)]
 pub struct MemLog {
-    pub l: Vec<(Term, Term)>,
+    pub l: Vec<(Term, Term, MemWidth)>,
 }
 
 /// Multiple disjoint regions of memory, each with a separate `MemState` representation.  Adding a
@@ -231,6 +231,9 @@ pub trait Memory {
     /// Store to a concrete address.
     fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String>;
     fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String>;
+
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String>;
+    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String>;
 }
 
 impl Memory for MemState {
@@ -252,6 +255,25 @@ impl Memory for MemState {
             MemState::Multi(ref m) => m.load_concrete(w, addr),
         }
     }
+
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
+        match *self {
+            MemState::Concrete(ref mut m) => m.store(w, addr, val),
+            MemState::Map(ref mut m) => m.store(w, addr, val),
+            MemState::Snapshot(ref mut m) => m.store(w, addr, val),
+            MemState::Log(ref mut m) => m.store(w, addr, val),
+            MemState::Multi(ref mut m) => m.store(w, addr, val),
+        }
+    }
+    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
+        match *self {
+            MemState::Concrete(ref m) => m.load(w, addr),
+            MemState::Map(ref m) => m.load(w, addr),
+            MemState::Snapshot(ref m) => m.load(w, addr),
+            MemState::Log(ref m) => m.load(w, addr),
+            MemState::Multi(ref m) => m.load(w, addr),
+        }
+    }
 }
 
 impl Memory for MemConcrete {
@@ -271,6 +293,17 @@ impl Memory for MemConcrete {
         let val = micro_ram::mem_load(&self.m, w, addr);
         Ok(Term::const_(val))
     }
+
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
+        let addr = addr.as_const_or_err()
+            .map_err(|e| format!("when evaluating addr: {e}"))?;
+        self.store_concrete(w, addr, val)
+    }
+    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
+        let addr = addr.as_const_or_err()
+            .map_err(|e| format!("when evaluating addr: {e}"))?;
+        self.load_concrete(w, addr)
+    }
 }
 
 impl Memory for MemMap {
@@ -278,6 +311,13 @@ impl Memory for MemMap {
         todo!("MemMap NYI")
     }
     fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
+        todo!("MemMap NYI")
+    }
+
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
+        todo!("MemMap NYI")
+    }
+    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
         todo!("MemMap NYI")
     }
 }
@@ -289,14 +329,29 @@ impl Memory for MemSnapshot {
     fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
         todo!("MemSnapshot NYI")
     }
+
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
+        todo!("MemSnapshot NYI")
+    }
+    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
+        todo!("MemSnapshot NYI")
+    }
 }
 
 impl Memory for MemLog {
     fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
-        todo!("MemLog NYI")
+        self.store(w, Term::const_(addr), val)
     }
     fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
-        todo!("MemLog NYI")
+        Err("MemLog load_concrete NYI".into())
+    }
+
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
+        self.l.push((addr, val, w));
+        Ok(())
+    }
+    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
+        Err("MemLog load NYI".into())
     }
 }
 
@@ -315,6 +370,13 @@ impl Memory for MemMulti {
             .ok_or_else(|| format!("address 0x{addr:x} does not fall within a concrete region"))?;
         let off = addr - start;
         mem.load_concrete(w, off)
+    }
+
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
+        todo!("MemMulti NYI")
+    }
+    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
+        todo!("MemMulti NYI")
     }
 }
 

@@ -8,7 +8,7 @@ use sym_proof::Addr;
 use sym_proof::micro_ram::NUM_REGS;
 use sym_proof::micro_ram::import;
 use sym_proof::proof::{Proof, Prop};
-use sym_proof::symbolic::{State, MemState, MemConcrete, VarCounter, Term, Pred};
+use sym_proof::symbolic::{State, MemState, MemConcrete, MemLog, VarCounter, Term, Pred};
 
 fn run(path: &str) -> Result<(), String> {
     let exec = import::load_exec(path);
@@ -51,12 +51,15 @@ fn run(path: &str) -> Result<(), String> {
     let regs = (0 .. NUM_REGS).map(|_| v.var()).collect::<Box<[_]>>();
     let mut regs = *<Box<[_; NUM_REGS]>>::try_from(regs).unwrap();
     regs[0] = Term::const_(0);
-    regs[11] = Term::const_(conc_state.regs[11]);
-    regs[13] = Term::const_(conc_state.regs[13]);
+    //regs[11] = Term::const_(conc_state.regs[11]);
+    //regs[13] = Term::const_(conc_state.regs[13]);
+    /*
     let mem = MemState::Concrete(MemConcrete {
         m: HashMap::new(),
         max: Addr::MAX,
     });
+    */
+    let mem = MemState::Log(MemLog { l: Vec::new() });
     let state = State::new(
         v,
         conc_state.pc,
@@ -67,13 +70,22 @@ fn run(path: &str) -> Result<(), String> {
 
     let l_step = pf.rule_step_zero(state);
     pf.rule_step_extend(l_step, |mut spf| {
+        // Step over the condition check `cmpe` + `cnjmp`
         spf.tactic_step_concrete()?;
         spf.admit(Pred::Eq(
             Term::cmpe(regs[12].clone(), 0.into()),
             0.into(),
         ));
         spf.tactic_step_jmp_taken()?;
+
+        // Run the loop body.
         spf.tactic_run_concrete()?;
+        // Load
+        spf.rule_step_mem_load_fresh()?;
+        spf.tactic_run_concrete()?;
+        // Store
+        spf.rule_step_mem_symbolic()?;
+        spf.tactic_run_concrete_until(conc_state.pc)?;
         Ok(())
     })?;
 
