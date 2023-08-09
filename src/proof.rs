@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use crate::{Word, Addr};
 use crate::symbolic::{State, Term, Pred, Memory, VarCounter, Subst};
-use crate::micro_ram::{Instr, Opcode, Reg};
+use crate::micro_ram::{self, Instr, Opcode, Reg};
 
 
 #[derive(Clone, Debug)]
@@ -90,6 +90,22 @@ impl StepProp {
             self.all_preds.swap(i, j);
         }
         self.num_base_preds -= 1;
+    }
+
+    /// Check that a concrete state satisfies the precondition under the provided evaluation of the
+    /// `vars`.
+    pub fn check_pre_concrete(
+        &self,
+        vars: &[Word],
+        conc: &micro_ram::State,
+    ) -> Result<(), String> {
+        self.pre.check_eq_concrete(vars, conc)?;
+        for pred in self.preds() {
+            if !pred.eval(vars) {
+                return Err(format!("predicate {} does not hold on concrete evaluation", pred));
+            }
+        }
+        Ok(())
     }
 }
 

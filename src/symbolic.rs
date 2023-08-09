@@ -185,6 +185,26 @@ impl Term {
             _ => false,
         }
     }
+
+    pub fn eval(&self, vars: &[Word]) -> Word {
+        match self.0 {
+            TermInner::Var(v) => vars[v],
+            TermInner::Const(x) => x,
+            TermInner::Not(ref a) => !a.eval(vars),
+            TermInner::Binary(op, ref ab) => {
+                let (ref a, ref b) = **ab;
+                op.eval(a.eval(vars), b.eval(vars))
+            },
+            TermInner::Mux(ref cte) => {
+                let (ref c, ref t, ref e) = **cte;
+                if c.eval(vars) != 0 {
+                    t.eval(vars)
+                } else {
+                    e.eval(vars)
+                }
+            },
+        }
+    }
 }
 
 impl From<Word> for Term {
@@ -200,7 +220,7 @@ impl fmt::Display for Term {
 impl fmt::Display for TermInner {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            TermInner::Const(x) => write!(f, "{}", x),
+            TermInner::Const(x) => write!(f, "{}", x as i64),
             TermInner::Var(v) => write!(f, "x{}", v),
             TermInner::Not(ref t) => write!(f, "!{}", t),
             TermInner::Binary(op, ref xy) => {
@@ -342,6 +362,19 @@ impl Pred {
                     && Term::check_eq_subst(a3, a_subst, b3, b_subst),
 
             _ => false,
+        }
+    }
+
+    pub fn eval(&self, vars: &[Word]) -> bool {
+        match *self {
+            Pred::Nonzero(ref t) => t.eval(vars) != 0,
+            Pred::Eq(ref a, ref b) => a.eval(vars) == b.eval(vars),
+            Pred::InRange { ref x, ref start, ref end } => {
+                let x = x.eval(vars);
+                let start = start.eval(vars);
+                let end = end.eval(vars);
+                start <= x && x < end
+            },
         }
     }
 }
@@ -639,5 +672,31 @@ impl State {
             regs: array::from_fn(|i| self.regs[i].subst(subst)),
             mem: self.mem.clone(),
         }
+    }
+
+    pub fn check_eq_concrete(&self, vars: &[Word], conc: &micro_ram::State) -> Result<(), String> {
+        if self.pc != conc.pc {
+            return Err(format!("pc {} does not match concrete pc {}",
+                self.pc, conc.pc));
+        }
+
+        for (i, (sym_reg, &conc_reg)) in self.regs.iter().zip(conc.regs.iter()).enumerate() {
+            let sym_reg_val = sym_reg.eval(vars);
+            if sym_reg_val != conc_reg {
+                return Err(format!("symbolic r{} {} = {} does not match concrete r{} {}",
+                    i, sym_reg, sym_reg_val, i, conc_reg));
+            }
+        }
+
+        let cycle = self.cycle.eval(vars);
+        if cycle != conc.cycle {
+            return Err(format!("symbolic cycle {} = {} does not match concrete cycle {}",
+                self.cycle, cycle, conc.cycle));
+        }
+
+        // FIXME: check mem
+        eprintln!("ADMITTED: State::check_eq_concrete memory check");
+
+        Ok(())
     }
 }

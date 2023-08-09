@@ -142,5 +142,5 @@ pub fn convert_ram_state(ram_state: &RamState) -> State {
     let mut regs = [0; NUM_REGS];
     regs[..ram_state.regs.len()].copy_from_slice(&ram_state.regs);
     let mem = Default::default();
-    State { pc, regs, mem }
+    State { pc, cycle: 0, regs, mem }
 }

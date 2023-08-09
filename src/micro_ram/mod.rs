@@ -63,6 +63,7 @@ pub const NUM_REGS: usize = 33;
 #[derive(Clone, Debug)]
 pub struct State {
     pub pc: Addr,
+    pub cycle: Word,
     pub regs: [Word; NUM_REGS],
     pub mem: HashMap<Addr, Word>,
 }
@@ -71,6 +72,7 @@ impl Default for State {
     fn default() -> State {
         State {
             pc: 0,
+            cycle: 0,
             regs: [0; NUM_REGS],
             mem: HashMap::new(),
         }
@@ -161,6 +163,7 @@ impl State {
         }
 
         self.pc = self.pc.wrapping_add(1);
+        self.cycle += 1;
     }
 }
 

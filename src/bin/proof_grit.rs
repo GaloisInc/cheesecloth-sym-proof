@@ -5,7 +5,7 @@ use std::convert::TryFrom;
 use std::env;
 use env_logger;
 use log::trace;
-use sym_proof::Addr;
+use sym_proof::{Word, Addr};
 use sym_proof::micro_ram::NUM_REGS;
 use sym_proof::micro_ram::import;
 use sym_proof::proof::{Proof, Prop};
@@ -126,140 +126,145 @@ fn run(path: &str) -> Result<(), String> {
             eprintln!("pred (derived): {}", pred);
         }
     };
-    //dump(pf.lemma(l_loop));
+    dump(pf.lemma(l_loop));
 
-    let l_loop2 = pf.rule_step_seq(l_loop, l_loop, |vars| {
-        let rest: [Option<Term>; 40] = array::from_fn(|_| Some(vars.var()));
-        let mut rest1 = rest.clone();
-        let mut rest2 = rest.clone();
+    let mut l_loops = vec![l_loop];
+    for i in 0 .. 6 {
+        eprintln!("\n ===== build {}-iteration proof =====", 2 << i);
+        let l_prev = *l_loops.last().unwrap();
 
-        let forgotten: [Option<Term>; 5] = array::from_fn(|_| Some(vars.var()));
-        let mut forgotten1: [Option<Term>; 5] = forgotten.clone();
-        let mut forgotten2: [Option<Term>; 5] = forgotten.clone();
+        let l_cur = pf.rule_step_seq(l_prev, l_prev, |vars| {
+            let rest: [Option<Term>; 40] = array::from_fn(|_| Some(vars.var()));
+            let mut rest1 = rest.clone();
+            let mut rest2 = rest.clone();
 
-        let mut n2 = rest[12].clone();
-        let mut n1 = Some(Term::add(n2.clone().unwrap(), Term::const_((-1_i64) as u64)));
+            let forgotten: [Option<Term>; 5] = array::from_fn(|_| Some(vars.var()));
+            let mut forgotten1: [Option<Term>; 5] = forgotten.clone();
+            let mut forgotten2: [Option<Term>; 5] = forgotten.clone();
 
-        let mut cycle2 = rest[33].clone();
-        let mut cycle1 = Some(Term::add(cycle2.clone().unwrap(), Term::const_(13)));
+            let mut n2 = rest[12].clone();
+            let mut n1 = Some(Term::add(n2.clone().unwrap(), Term::const_((-1_i64 << i) as u64)));
 
-        (
-            SubstTable::new(move |v| match v {
-                12 => n2.take().unwrap(),
-                33 => cycle2.take().unwrap(),
-                35 => forgotten2[0].take().unwrap(),
-                36 => forgotten2[1].take().unwrap(),
-                37 => forgotten2[2].take().unwrap(),
-                38 => forgotten2[3].take().unwrap(),
-                39 => forgotten2[4].take().unwrap(),
-                _ => rest2[v].take().unwrap(),
-            }),
-            SubstTable::new(move |v| match v {
-                12 => n1.take().unwrap(),
-                33 => cycle1.take().unwrap(),
-                11 => forgotten1[0].take().unwrap(),
-                13 => forgotten1[1].take().unwrap(),
-                14 => forgotten1[2].take().unwrap(),
-                15 => forgotten1[3].take().unwrap(),
-                32 => forgotten1[4].take().unwrap(),
-                _ => rest1[v].take().unwrap(),
-            }),
-        )
-    })?;
+            let mut cycle2 = rest[33].clone();
+            let mut cycle1 = Some(Term::add(cycle2.clone().unwrap(), Term::const_(13 << i)));
 
-    eprintln!("before strengthen:");
-    dump_preds(pf.lemma(l_loop2));
-    let gt_1 = Pred::Nonzero(Term::cmpa(regs[12].clone(), 1.into()));
-    pf.rule_step_extend(l_loop2, |mut spf| {
-        spf.rule_strengthen_preds(vec![gt_1], |ppf| {
-            ppf.show();
-            ppf.rule_nonzero_const(1);
-            ppf.rule_gt_sub_unsigned(regs[12].clone(), 1.into(), 1.into())?;
-            ppf.rule_gt_ge_unsigned(regs[12].clone(), 1.into(), 0.into())?;
-            ppf.show();
-            Ok(())
-        })
-    })?;
-    eprintln!("after strengthen:");
-    dump_preds(pf.lemma(l_loop2));
+            (
+                SubstTable::new(move |v| match v {
+                    12 => n2.take().unwrap(),
+                    33 => cycle2.take().unwrap(),
+                    35 => forgotten2[0].take().unwrap(),
+                    36 => forgotten2[1].take().unwrap(),
+                    37 => forgotten2[2].take().unwrap(),
+                    38 => forgotten2[3].take().unwrap(),
+                    39 => forgotten2[4].take().unwrap(),
+                    _ => rest2[v].take().unwrap(),
+                }),
+                SubstTable::new(move |v| match v {
+                    12 => n1.take().unwrap(),
+                    33 => cycle1.take().unwrap(),
+                    11 => forgotten1[0].take().unwrap(),
+                    13 => forgotten1[1].take().unwrap(),
+                    14 => forgotten1[2].take().unwrap(),
+                    15 => forgotten1[3].take().unwrap(),
+                    32 => forgotten1[4].take().unwrap(),
+                    _ => rest1[v].take().unwrap(),
+                }),
+            )
+        })?;
 
-    dump(pf.lemma(l_loop2));
+        eprintln!("before strengthen:");
+        dump_preds(pf.lemma(l_cur));
 
-    let l_loop4 = pf.rule_step_seq(l_loop2, l_loop2, |vars| {
-        let rest: [Option<Term>; 40] = array::from_fn(|_| Some(vars.var()));
-        let mut rest1 = rest.clone();
-        let mut rest2 = rest.clone();
+        let bound = Term::const_((2 << i) - 1);
+        let prev_bound = Term::const_((1 << i) - 1);
+        let step = Term::const_(1 << i);
+        let gt_bound = Pred::Nonzero(Term::cmpa(regs[12].clone(), bound.clone()));
+        pf.rule_step_extend(l_cur, |mut spf| {
+            spf.rule_strengthen_preds(vec![gt_bound], |ppf| {
+                //ppf.show();
+                ppf.rule_nonzero_const(1);
+                ppf.rule_gt_ge_unsigned(regs[12].clone(), bound.clone(), prev_bound.clone())?;
+                ppf.rule_gt_sub_unsigned(regs[12].clone(), bound.clone(), step.clone())?;
+                ppf.show();
+                Ok(())
+            })
+        })?;
 
-        let forgotten: [Option<Term>; 5] = array::from_fn(|_| Some(vars.var()));
-        let mut forgotten1: [Option<Term>; 5] = forgotten.clone();
-        let mut forgotten2: [Option<Term>; 5] = forgotten.clone();
+        eprintln!("after strengthen:");
+        dump_preds(pf.lemma(l_cur));
 
-        let mut n2 = rest[12].clone();
-        let mut n1 = Some(
-            Term::add(
-                Term::add(
-                    n2.clone().unwrap(),
-                    Term::const_((-1_i64) as u64),
-                ),
-                Term::const_((-1_i64) as u64),
-            ),
-        );
+        //dump(pf.lemma(l_cur));
+        l_loops.push(l_cur);
+    }
 
-        let mut cycle2 = rest[33].clone();
-        let mut cycle1 = Some(
-            Term::add(
-                Term::add(
-                    cycle2.clone().unwrap(),
-                    Term::const_(13),
-                ),
-                Term::const_(13),
-            ),
-        );
+    let l_loop48 = {
+        eprintln!("\n ===== build {}-iteration proof =====", 48);
+        let l_loop16 = l_loops[4];
+        let l_loop32 = l_loops[5];
 
-        (
-            SubstTable::new(move |v| match v {
-                12 => n2.take().unwrap(),
-                33 => cycle2.take().unwrap(),
-                35 => forgotten2[0].take().unwrap(),
-                36 => forgotten2[1].take().unwrap(),
-                37 => forgotten2[2].take().unwrap(),
-                38 => forgotten2[3].take().unwrap(),
-                39 => forgotten2[4].take().unwrap(),
-                _ => rest2[v].take().unwrap(),
-            }),
-            SubstTable::new(move |v| match v {
-                12 => n1.take().unwrap(),
-                33 => cycle1.take().unwrap(),
-                11 => forgotten1[0].take().unwrap(),
-                13 => forgotten1[1].take().unwrap(),
-                14 => forgotten1[2].take().unwrap(),
-                15 => forgotten1[3].take().unwrap(),
-                32 => forgotten1[4].take().unwrap(),
-                _ => rest1[v].take().unwrap(),
-            }),
-        )
-    })?;
+        let l_loop48 = pf.rule_step_seq(l_loop16, l_loop32, |vars| {
+            let rest: [Option<Term>; 40] = array::from_fn(|_| Some(vars.var()));
+            let mut rest1 = rest.clone();
+            let mut rest2 = rest.clone();
 
-    eprintln!("before strengthen:");
-    dump_preds(pf.lemma(l_loop4));
-    let gt_3 = Pred::Nonzero(Term::cmpa(regs[12].clone(), 3.into()));
-    pf.rule_step_extend(l_loop4, |mut spf| {
-        spf.rule_strengthen_preds(vec![gt_3], |ppf| {
-            ppf.show();
-            ppf.rule_nonzero_const(1);
-            ppf.rule_gt_sub_unsigned(regs[12].clone(), 3.into(), 2.into())?;
-            ppf.rule_gt_ge_unsigned(regs[12].clone(), 3.into(), 1.into())?;
-            ppf.show();
-            Ok(())
-        })
-    })?;
-    eprintln!("after strengthen:");
-    dump_preds(pf.lemma(l_loop4));
+            let forgotten: [Option<Term>; 5] = array::from_fn(|_| Some(vars.var()));
+            let mut forgotten1: [Option<Term>; 5] = forgotten.clone();
+            let mut forgotten2: [Option<Term>; 5] = forgotten.clone();
 
-    dump(pf.lemma(l_loop4));
+            let mut n2 = rest[12].clone();
+            let mut n1 = Some(Term::add(n2.clone().unwrap(), Term::const_((-16_i64) as u64)));
 
-    dbg!(l_loop);
-    dbg!(l_loop2);
+            let mut cycle2 = rest[33].clone();
+            let mut cycle1 = Some(Term::add(cycle2.clone().unwrap(), Term::const_(13 * 16)));
+
+            (
+                SubstTable::new(move |v| match v {
+                    12 => n2.take().unwrap(),
+                    33 => cycle2.take().unwrap(),
+                    35 => forgotten2[0].take().unwrap(),
+                    36 => forgotten2[1].take().unwrap(),
+                    37 => forgotten2[2].take().unwrap(),
+                    38 => forgotten2[3].take().unwrap(),
+                    39 => forgotten2[4].take().unwrap(),
+                    _ => rest2[v].take().unwrap(),
+                }),
+                SubstTable::new(move |v| match v {
+                    12 => n1.take().unwrap(),
+                    33 => cycle1.take().unwrap(),
+                    11 => forgotten1[0].take().unwrap(),
+                    13 => forgotten1[1].take().unwrap(),
+                    14 => forgotten1[2].take().unwrap(),
+                    15 => forgotten1[3].take().unwrap(),
+                    32 => forgotten1[4].take().unwrap(),
+                    _ => rest1[v].take().unwrap(),
+                }),
+            )
+        })?;
+
+        dump(pf.lemma(l_loop48));
+        l_loop48
+    };
+
+
+    let p = pf.lemma(l_loop48).as_step().unwrap();
+    // This version fails, since concretely the loop only runs 63 times, not 64:
+    //let p = pf.lemma(l_loops[6]).as_step().unwrap();
+
+    // Check that the precondition holds on the concrete state.  We have to provide a value for
+    // each variable, similar to the substitution provided when joining lemmas.
+    // FIXME: "forgotten" vars should be existential, not universal.  The current formulation of
+    // StepProp lets us assert that a bunch of registers are zero after the loop, which is false.
+    let conc_subst: [Word; 40] = array::from_fn(|i| match i {
+        0 ..= 32 => conc_state.regs[i],
+        33 => conc_state.cycle,
+        _ => 0,
+    });
+    p.check_pre_concrete(&conc_subst, &conc_state)?;
+
+    // The postcondition must hold under the same substitution, so we can compute the final cycle
+    // count.
+    let post_cycle = p.post().cycle.eval(&conc_subst);
+    eprintln!("cycle count: {} -> {}", conc_state.cycle, post_cycle);
 
     Ok(())
 }
