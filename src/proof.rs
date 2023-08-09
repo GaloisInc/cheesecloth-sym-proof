@@ -283,7 +283,6 @@ impl StepProof<'_> {
             if qs.contains(&self.p.preds()[i]) {
                 self.p.base_to_derived_pred(i);
                 num_removed += 1;
-                break;
             }
         }
         if num_removed == 0 {

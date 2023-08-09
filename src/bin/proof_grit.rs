@@ -115,6 +115,17 @@ fn run(path: &str) -> Result<(), String> {
             eprintln!("pred: {}", pred);
         }
     };
+    let dump_preds = |prop: &_| {
+        let p = match *prop {
+            Prop::Step(ref p) => p,
+        };
+        for pred in p.preds() {
+            eprintln!("pred: {}", pred);
+        }
+        for pred in p.derived_preds() {
+            eprintln!("pred (derived): {}", pred);
+        }
+    };
     //dump(pf.lemma(l_loop));
 
     let l_loop2 = pf.rule_step_seq(l_loop, l_loop, |vars| {
@@ -156,6 +167,8 @@ fn run(path: &str) -> Result<(), String> {
         )
     })?;
 
+    eprintln!("before strengthen:");
+    dump_preds(pf.lemma(l_loop2));
     let gt_1 = Pred::Nonzero(Term::cmpa(regs[12].clone(), 1.into()));
     pf.rule_step_extend(l_loop2, |mut spf| {
         spf.rule_strengthen_preds(vec![gt_1], |ppf| {
@@ -167,6 +180,8 @@ fn run(path: &str) -> Result<(), String> {
             Ok(())
         })
     })?;
+    eprintln!("after strengthen:");
+    dump_preds(pf.lemma(l_loop2));
 
     dump(pf.lemma(l_loop2));
 
@@ -224,7 +239,24 @@ fn run(path: &str) -> Result<(), String> {
             }),
         )
     })?;
-    //dump(pf.lemma(l_loop4));
+
+    eprintln!("before strengthen:");
+    dump_preds(pf.lemma(l_loop4));
+    let gt_3 = Pred::Nonzero(Term::cmpa(regs[12].clone(), 3.into()));
+    pf.rule_step_extend(l_loop4, |mut spf| {
+        spf.rule_strengthen_preds(vec![gt_3], |ppf| {
+            ppf.show();
+            ppf.rule_nonzero_const(1);
+            ppf.rule_gt_sub_unsigned(regs[12].clone(), 3.into(), 2.into())?;
+            ppf.rule_gt_ge_unsigned(regs[12].clone(), 3.into(), 1.into())?;
+            ppf.show();
+            Ok(())
+        })
+    })?;
+    eprintln!("after strengthen:");
+    dump_preds(pf.lemma(l_loop4));
+
+    dump(pf.lemma(l_loop4));
 
     dbg!(l_loop);
     dbg!(l_loop2);

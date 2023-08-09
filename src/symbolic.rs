@@ -25,6 +25,10 @@ impl Term {
         Term(TermInner::Const(x))
     }
 
+    pub fn is_const(&self) -> bool {
+        self.as_const().is_some()
+    }
+
     pub fn as_const(&self) -> Option<Word> {
         match self.0 {
             TermInner::Const(x) => Some(x),
@@ -49,10 +53,36 @@ impl Term {
 
     pub fn binary(op: BinOp, a: Term, b: Term) -> Term {
         if let (Some(x), Some(y)) = (a.as_const(), b.as_const()) {
-            Term::const_(op.eval(x, y))
-        } else {
-            Term(TermInner::Binary(op, Rc::new((a, b))))
+            return Term::const_(op.eval(x, y));
         }
+
+        // Normalization rules
+        match op {
+            BinOp::Add => {
+                // Put the constant on the right whenever possible.
+                if matches!(a.0, TermInner::Const(_)) {
+                    return Term::add(b, a);
+                }
+                // When adding to an existing `x + c`, fold the constants together.
+                if let Some(bc) = b.as_const() {
+                    if let TermInner::Binary(BinOp::Add, ref xy) = a.0 {
+                        let (ref x, ref y) = **xy;
+                        if let Some(yc) = y.as_const() {
+                            return Term::add(x.clone(), Term::const_(bc.wrapping_add(yc)));
+                        }
+                    }
+                }
+            },
+            BinOp::Sub => {
+                // Turn `x - c` into `x + (-c)`.
+                if let Some(bc) = b.as_const() {
+                    return Term::add(a, Term::const_(bc.wrapping_neg()));
+                }
+            },
+            _ => {},
+        }
+
+        Term(TermInner::Binary(op, Rc::new((a, b))))
     }
 
     pub fn mux(c: Term, t: Term, e: Term) -> Term {
