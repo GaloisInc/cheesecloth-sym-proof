@@ -14,6 +14,7 @@ impl Prop {
     pub fn as_step(&self) -> Result<&StepProp, String> {
         match *self {
             Prop::Step(ref p) => Ok(p),
+            #[allow(unreachable_patterns)]
             ref prop => Err(format!("expected Prop::Step, but got {:?}", prop)),
         }
     }
@@ -21,6 +22,7 @@ impl Prop {
     pub fn as_step_mut(&mut self) -> Result<&mut StepProp, String> {
         match *self {
             Prop::Step(ref mut p) => Ok(p),
+            #[allow(unreachable_patterns)]
             ref prop => Err(format!("expected Prop::Step, but got {:?}", prop)),
         }
     }
@@ -485,7 +487,7 @@ impl StepProof<'_> {
         let instr = self.fetch_instr()?;
 
         match instr.opcode {
-            Opcode::Load(w) => {
+            Opcode::Load(_) => {
                 let z = self.p.vars.fresh();
                 self.p.post.set_reg(instr.rd, z);
             },

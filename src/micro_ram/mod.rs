@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::mem;
-use crate::{Word, WORD_BYTES, WORD_BITS, Addr, BinOp};
+use crate::{Word, WORD_BYTES, Addr, BinOp};
 
 
 pub mod import;

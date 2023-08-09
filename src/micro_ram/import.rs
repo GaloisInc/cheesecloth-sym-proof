@@ -25,7 +25,7 @@ pub fn load_exec<P: AsRef<Path>>(path: P) -> ExecBody {
     };
     parse_exec.validate().unwrap();
 
-    let mut multi_exec = parse_exec.inner;
+    let multi_exec = parse_exec.inner;
     assert_eq!(multi_exec.execs.len(), 1);
     assert_eq!(multi_exec.mem_equiv.len(), 0);
     let (_, exec) = multi_exec.execs.into_iter().next().unwrap();

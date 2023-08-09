@@ -5,7 +5,6 @@ use env_logger;
 use log::trace;
 use witness_checker::micro_ram::types::Advice;
 use sym_proof::{Addr, Word, WORD_BYTES};
-use sym_proof::micro_ram::State;
 use sym_proof::micro_ram::import;
 
 fn run(path: &str) {

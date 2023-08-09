@@ -6,18 +6,20 @@
 //! ```
 //! cargo run --bin proof_grit -- grit.cbor
 //! ```
+// The proof implementation returns `Err` when a rule fails to apply.  A bad proof will be caught
+// eventually, but checking all `Result`s lets us catch problems sooner.
+#![deny(unused_must_use)]
 use std::array;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::env;
 use env_logger;
 use log::trace;
-use sym_proof::{Word, Addr};
+use sym_proof::Word;
 use sym_proof::micro_ram::NUM_REGS;
 use sym_proof::micro_ram::import;
 use sym_proof::proof::{Proof, Prop, LemmaId};
 use sym_proof::symbolic::{
-    State, MemState, MemConcrete, MemLog, VarCounter, Term, Pred, IdentitySubsts, SubstTable,
+    State, MemState, MemLog, VarCounter, Term, Pred, SubstTable,
 };
 
 fn run(path: &str) -> Result<(), String> {
@@ -131,7 +133,7 @@ fn run(path: &str) -> Result<(), String> {
             Ok(())
         })?;
         // Now we can rewrite the value of r32 to the constant 0.
-        spf.rule_rewrite_reg(32, Term::const_(0));
+        spf.rule_rewrite_reg(32, Term::const_(0))?;
         // The jump condition is concrete, so `step_concrete` can handle it.
         spf.tactic_step_concrete()?;
 
