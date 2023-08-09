@@ -8,7 +8,7 @@ use log::trace;
 use sym_proof::{Word, Addr};
 use sym_proof::micro_ram::NUM_REGS;
 use sym_proof::micro_ram::import;
-use sym_proof::proof::{Proof, Prop};
+use sym_proof::proof::{Proof, Prop, LemmaId};
 use sym_proof::symbolic::{
     State, MemState, MemConcrete, MemLog, VarCounter, Term, Pred, IdentitySubsts, SubstTable,
 };
@@ -128,12 +128,17 @@ fn run(path: &str) -> Result<(), String> {
     };
     dump(pf.lemma(l_loop));
 
-    let mut l_loops = vec![l_loop];
-    for i in 0 .. 6 {
-        eprintln!("\n ===== build {}-iteration proof =====", 2 << i);
-        let l_prev = *l_loops.last().unwrap();
+    // For each `n`, this stores the `LemmaId` of a `Prop::Step` covering `n` iterations.
+    let mut l_loops = HashMap::<u64, LemmaId>::new();
+    l_loops.insert(1, l_loop);
 
-        let l_cur = pf.rule_step_seq(l_prev, l_prev, |vars| {
+    let mut join = |m1, m2| -> Result<(), String> {
+        let n = m1 + m2;
+        eprintln!("\nbuild {}-iteration proof:", n);
+        let l1 = l_loops[&m1];
+        let l2 = l_loops[&m2];
+
+        let l_cur = pf.rule_step_seq(l1, l2, |vars| {
             let rest: [Option<Term>; 40] = array::from_fn(|_| Some(vars.var()));
             let mut rest1 = rest.clone();
             let mut rest2 = rest.clone();
@@ -143,10 +148,12 @@ fn run(path: &str) -> Result<(), String> {
             let mut forgotten2: [Option<Term>; 5] = forgotten.clone();
 
             let mut n2 = rest[12].clone();
-            let mut n1 = Some(Term::add(n2.clone().unwrap(), Term::const_((-1_i64 << i) as u64)));
+            let mut n1 = Some(Term::add(n2.clone().unwrap(),
+                Term::const_(-(m1 as i64) as u64)));
 
             let mut cycle2 = rest[33].clone();
-            let mut cycle1 = Some(Term::add(cycle2.clone().unwrap(), Term::const_(13 << i)));
+            let mut cycle1 = Some(Term::add(cycle2.clone().unwrap(),
+                Term::const_(13 * m1)));
 
             (
                 SubstTable::new(move |v| match v {
@@ -175,9 +182,9 @@ fn run(path: &str) -> Result<(), String> {
         eprintln!("before strengthen:");
         dump_preds(pf.lemma(l_cur));
 
-        let bound = Term::const_((2 << i) - 1);
-        let prev_bound = Term::const_((1 << i) - 1);
-        let step = Term::const_(1 << i);
+        let bound = Term::const_(n - 1);
+        let prev_bound = Term::const_(m1 - 1);
+        let step = Term::const_(m1);
         let gt_bound = Pred::Nonzero(Term::cmpa(regs[12].clone(), bound.clone()));
         pf.rule_step_extend(l_cur, |mut spf| {
             spf.rule_strengthen_preds(vec![gt_bound], |ppf| {
@@ -194,61 +201,27 @@ fn run(path: &str) -> Result<(), String> {
         dump_preds(pf.lemma(l_cur));
 
         //dump(pf.lemma(l_cur));
-        l_loops.push(l_cur);
-    }
+        l_loops.insert(n, l_cur);
 
-    let l_loop48 = {
-        eprintln!("\n ===== build {}-iteration proof =====", 48);
-        let l_loop16 = l_loops[4];
-        let l_loop32 = l_loops[5];
-
-        let l_loop48 = pf.rule_step_seq(l_loop16, l_loop32, |vars| {
-            let rest: [Option<Term>; 40] = array::from_fn(|_| Some(vars.var()));
-            let mut rest1 = rest.clone();
-            let mut rest2 = rest.clone();
-
-            let forgotten: [Option<Term>; 5] = array::from_fn(|_| Some(vars.var()));
-            let mut forgotten1: [Option<Term>; 5] = forgotten.clone();
-            let mut forgotten2: [Option<Term>; 5] = forgotten.clone();
-
-            let mut n2 = rest[12].clone();
-            let mut n1 = Some(Term::add(n2.clone().unwrap(), Term::const_((-16_i64) as u64)));
-
-            let mut cycle2 = rest[33].clone();
-            let mut cycle1 = Some(Term::add(cycle2.clone().unwrap(), Term::const_(13 * 16)));
-
-            (
-                SubstTable::new(move |v| match v {
-                    12 => n2.take().unwrap(),
-                    33 => cycle2.take().unwrap(),
-                    35 => forgotten2[0].take().unwrap(),
-                    36 => forgotten2[1].take().unwrap(),
-                    37 => forgotten2[2].take().unwrap(),
-                    38 => forgotten2[3].take().unwrap(),
-                    39 => forgotten2[4].take().unwrap(),
-                    _ => rest2[v].take().unwrap(),
-                }),
-                SubstTable::new(move |v| match v {
-                    12 => n1.take().unwrap(),
-                    33 => cycle1.take().unwrap(),
-                    11 => forgotten1[0].take().unwrap(),
-                    13 => forgotten1[1].take().unwrap(),
-                    14 => forgotten1[2].take().unwrap(),
-                    15 => forgotten1[3].take().unwrap(),
-                    32 => forgotten1[4].take().unwrap(),
-                    _ => rest1[v].take().unwrap(),
-                }),
-            )
-        })?;
-
-        dump(pf.lemma(l_loop48));
-        l_loop48
+        Ok(())
     };
 
+    join(1, 1)?;
+    join(2, 2)?;
+    join(4, 4)?;
+    join(8, 8)?;
+    join(16, 16)?;
+    join(32, 32)?;
+    join(32, 16)?;
+    join(48, 8)?;
+    join(56, 4)?;
+    join(60, 2)?;
+    join(62, 1)?;
 
-    let p = pf.lemma(l_loop48).as_step().unwrap();
-    // This version fails, since concretely the loop only runs 63 times, not 64:
-    //let p = pf.lemma(l_loops[6]).as_step().unwrap();
+    eprintln!("\napply proof to concrete state:");
+
+    // Changing 63 to 64 here fails, because concretely the loop only runs for 63 iterations.
+    let p = pf.lemma(l_loops[&63]).as_step().unwrap();
 
     // Check that the precondition holds on the concrete state.  We have to provide a value for
     // each variable, similar to the substitution provided when joining lemmas.

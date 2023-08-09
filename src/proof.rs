@@ -130,7 +130,7 @@ pub struct Proof {
     lemmas: Vec<Prop>,
 }
 
-type LemmaId = usize;
+pub type LemmaId = usize;
 
 impl Proof {
     pub fn new(prog: HashMap<u64, Instr>) -> Proof {
