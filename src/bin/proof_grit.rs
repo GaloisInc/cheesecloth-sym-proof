@@ -69,18 +69,19 @@ fn run(path: &str) -> Result<(), String> {
         regs.clone(),
         mem,
     );
-    let mut preds = Vec::new();
+    let mut preds = vec![
+        Pred::Nonzero(Term::cmpa(regs[12].clone(), Term::const_(0))),
+    ];
 
     let l_loop = pf.rule_step_zero(v, preds, state);
     pf.rule_step_extend(l_loop, |mut spf| {
         // Step over the condition check `cmpe` + `cnjmp`
         spf.tactic_step_concrete()?;
         spf.rule_derive_pred(|ppf| {
-            ppf.admit(Pred::Eq(
-                Term::cmpe(regs[12].clone(), 0.into()),
-                0.into(),
-            ));
-        });
+            ppf.show();
+            ppf.rule_gt_ne_unsigned(regs[12].clone(), 0.into())?;
+            Ok(())
+        })?;
         spf.tactic_step_jmp_taken()?;
 
         // Run the loop body.
@@ -114,10 +115,7 @@ fn run(path: &str) -> Result<(), String> {
             eprintln!("pred: {}", pred);
         }
     };
-    dump(pf.lemma(l_loop));
-
-    let mk_loop2_substs = |vars: &mut VarCounter| {
-    };
+    //dump(pf.lemma(l_loop));
 
     let l_loop2 = pf.rule_step_seq(l_loop, l_loop, |vars| {
         let rest: [Option<Term>; 40] = array::from_fn(|_| Some(vars.var()));
@@ -157,6 +155,19 @@ fn run(path: &str) -> Result<(), String> {
             }),
         )
     })?;
+
+    let gt_1 = Pred::Nonzero(Term::cmpa(regs[12].clone(), 1.into()));
+    pf.rule_step_extend(l_loop2, |mut spf| {
+        spf.rule_strengthen_preds(vec![gt_1], |ppf| {
+            ppf.show();
+            ppf.rule_nonzero_const(1);
+            ppf.rule_gt_sub_unsigned(regs[12].clone(), 1.into(), 1.into())?;
+            ppf.rule_gt_ge_unsigned(regs[12].clone(), 1.into(), 0.into())?;
+            ppf.show();
+            Ok(())
+        })
+    })?;
+
     dump(pf.lemma(l_loop2));
 
     let l_loop4 = pf.rule_step_seq(l_loop2, l_loop2, |vars| {
@@ -213,7 +224,7 @@ fn run(path: &str) -> Result<(), String> {
             }),
         )
     })?;
-    dump(pf.lemma(l_loop4));
+    //dump(pf.lemma(l_loop4));
 
     dbg!(l_loop);
     dbg!(l_loop2);

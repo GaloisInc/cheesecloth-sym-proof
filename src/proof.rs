@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ops::Deref;
-use crate::Addr;
+use crate::{Word, Addr};
 use crate::symbolic::{State, Term, Pred, Memory, VarCounter, Subst};
 use crate::micro_ram::{Instr, Opcode, Reg};
 
@@ -35,14 +35,25 @@ impl Prop {
 #[derive(Clone, Debug)]
 pub struct StepProp {
     vars: VarCounter,
-    preds: Vec<Pred>,
+    /// The `preds` of this proposition, plus some additional derived predicates that are used
+    /// internally.  The first `num_base_preds` are sufficient to imply the rest.
+    all_preds: Vec<Pred>,
+    num_base_preds: usize,
     pre: State,
     post: State,
 }
 
 impl StepProp {
     pub fn preds(&self) -> &[Pred] {
-        &self.preds
+        &self.all_preds[..self.num_base_preds]
+    }
+
+    pub fn derived_preds(&self) -> &[Pred] {
+        &self.all_preds[self.num_base_preds..]
+    }
+
+    pub fn all_preds(&self) -> &[Pred] {
+        &self.all_preds
     }
 
     pub fn pre(&self) -> &State {
@@ -51,6 +62,34 @@ impl StepProp {
 
     pub fn post(&self) -> &State {
         &self.post
+    }
+
+    /// Append `pred` to the list of base predicates.
+    pub fn push_pred(&mut self, pred: Pred) {
+        let i = self.num_base_preds;
+        let j = self.all_preds.len();
+        // We want to insert `pred` at `i`, after the last base predicate, but it's cheaper to push
+        // it at `j` and then swap it into place.
+        self.all_preds.push(pred);
+        if i != j {
+            self.all_preds.swap(i, j);
+        }
+        self.num_base_preds += 1;
+    }
+
+    /// Append `pred` to the list of derived predicates.
+    pub fn push_derived_pred(&mut self, pred: Pred) {
+        self.all_preds.push(pred);
+    }
+
+    /// Convert predicate `i` from a base predicate to a derived predicate.
+    pub fn base_to_derived_pred(&mut self, i: usize) {
+        assert!(i < self.num_base_preds);
+        let j = self.num_base_preds - 1;
+        if i != j {
+            self.all_preds.swap(i, j);
+        }
+        self.num_base_preds -= 1;
     }
 }
 
@@ -112,7 +151,8 @@ impl Proof {
     pub fn rule_step_zero(&mut self, vars: VarCounter, preds: Vec<Pred>, state: State) -> LemmaId {
         self.add_lemma(Prop::Step(StepProp {
             vars,
-            preds,
+            num_base_preds: preds.len(),
+            all_preds: preds,
             pre: state.clone(),
             post: state,
         }))
@@ -172,13 +212,16 @@ impl Proof {
         // FIXME: check equality of `s1.mem` and `s2.mem`
         eprintln!("ADMITTED: rule_step_seq memory equivalence");
 
-        let preds = p1.preds.iter().map(|p| p.subst(&mut subst1))
-            .chain(p2.preds.iter().map(|p| p.subst(&mut subst2)))
+        // We only care about the base predicates here.  The derived predicates can be dropped (and
+        // rederived later, if needed).
+        let preds = p1.preds().iter().map(|p| p.subst(&mut subst1))
+            .chain(p2.preds().iter().map(|p| p.subst(&mut subst2)))
             .collect::<Vec<_>>();
 
         Ok(self.add_lemma(Prop::Step(StepProp {
             vars,
-            preds,
+            num_base_preds: preds.len(),
+            all_preds: preds,
             pre: p1.pre.subst(&mut subst1),
             post: p2.post.subst(&mut subst2),
         })))
@@ -203,15 +246,58 @@ impl StepProof<'_> {
     ///
     /// The same effect can be achieved by including the predicate in the initial `preds` list when
     /// creating the `Prop::Step`.
-    pub fn rule_add_preds(&mut self, pred: Pred) {
-        self.p.preds.push(pred);
+    pub fn rule_add_pred(&mut self, pred: Pred) {
+        self.p.push_pred(pred);
     }
 
     // There is no "weakening" rule for removing a predicate, since we don't know which predicates
     // were used to establish correctness of various CPU steps.
 
-    pub fn rule_derive_pred(&mut self, f: impl FnOnce(&mut PredProof)) {
-        f(&mut PredProof { preds: &mut self.p.preds });
+    pub fn rule_derive_pred(
+        &mut self,
+        f: impl FnOnce(&mut PredProof) -> Result<(), String>,
+    ) -> Result<(), String> {
+        // `PredProof` only pushes at the end of the list, so everything it adds will be considered
+        // a derived predicate.
+        f(&mut PredProof { preds: &mut self.p.all_preds })
+    }
+
+    /// Strengthen the predicates: add `ps` to the base predicates, derive some additional
+    /// predicates `qs` from them, and demote any member of `qs` currently in the base predicates
+    /// to a derived predicate.
+    pub fn rule_strengthen_preds(
+        &mut self,
+        ps: Vec<Pred>,
+        f: impl FnOnce(&mut PredProof) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let num_ps = ps.len();
+        let mut preds = ps;
+        f(&mut PredProof { preds: &mut preds })?;
+
+        // Remove all `qs` from the base predicates.
+        let qs = &preds[num_ps..];
+        // Iterate in reverse order, since `base_to_derived_pred(j)` may modify elements at
+        // positions >= `j`.
+        let mut num_removed = 0;
+        for i in (0 .. self.p.preds().len()).rev() {
+            if qs.contains(&self.p.preds()[i]) {
+                self.p.base_to_derived_pred(i);
+                num_removed += 1;
+                break;
+            }
+        }
+        if num_removed == 0 {
+            return Err("found no predicates to remove".into());
+        }
+
+        // Add all `ps` to the base predicates.
+        for pred in preds.into_iter().take(num_ps) {
+            if !self.p.preds().contains(&pred) {
+                self.p.push_pred(pred);
+            }
+        }
+
+        Ok(())
     }
 
     fn fetch_instr(&self) -> Result<Instr, String> {
@@ -432,7 +518,7 @@ impl StepProof<'_> {
     pub fn rule_rewrite_reg(&mut self, reg: Reg, t: Term) -> Result<(), String> {
         let reg_val = self.p.post.reg_value(reg);
         let need_pred = Pred::Eq(reg_val.clone(), t.clone());
-        if !self.p.preds.contains(&need_pred) {
+        if !self.p.all_preds.contains(&need_pred) {
             return Err(format!("missing precondition: {} == {}", reg_val, t));
         }
         self.p.post.set_reg(reg, t);
@@ -475,6 +561,9 @@ impl StepProof<'_> {
 
 
 /// Helper for proving new predicates given some set of existing ones.
+///
+/// Note that this only pushes at the end of the list of predicates; it never modifies existing
+/// predicates or inserts in the middle of the list.
 pub struct PredProof<'a> {
     preds: &'a mut Vec<Pred>,
 }
@@ -485,5 +574,51 @@ impl PredProof<'_> {
         self.preds.push(pred);
     }
 
-    // TODO: add proper derivation rules
+    pub fn show(&self) {
+        for (i, p) in self.preds.iter().enumerate() {
+            eprintln!("{}:  {}", i, p);
+        }
+    }
+
+    fn require_premise(&self, premise: &Pred) -> Result<(), String> {
+        if !self.preds.contains(&premise) {
+            return Err(format!("missing premise: {}", premise));
+        }
+        Ok(())
+    }
+
+    /// Introduce `Nonzero(x)`.  Panics if `x` is zero.
+    pub fn rule_nonzero_const(&mut self, x: Word) {
+        assert!(x != 0);
+        self.preds.push(Pred::Nonzero(Term::const_(x)));
+    }
+
+    /// `x >u y` implies `x != y`.
+    pub fn rule_gt_ne_unsigned(&mut self, x: Term, y: Term) -> Result<(), String> {
+        self.require_premise(&Pred::Nonzero(Term::cmpa(x.clone(), y.clone())))?;
+        self.preds.push(Pred::Eq(Term::cmpe(x.clone(), y.clone()), 0.into()));
+        Ok(())
+    }
+
+    /// `x >u y` and `y >=u z` implies `x >u z`.
+    pub fn rule_gt_ge_unsigned(&mut self, x: Term, y: Term, z: Term) -> Result<(), String> {
+        self.require_premise(&Pred::Nonzero(Term::cmpa(x.clone(), y.clone())))?;
+        self.require_premise(&Pred::Nonzero(Term::cmpae(y.clone(), z.clone())))?;
+        self.preds.push(Pred::Nonzero(Term::cmpa(x, z)));
+        Ok(())
+    }
+
+    /// `x >u y` and `0 <=u z <=u y` implies `x - z >u y - z`.
+    pub fn rule_gt_sub_unsigned(&mut self, x: Term, y: Term, z: Term) -> Result<(), String> {
+        self.require_premise(&Pred::Nonzero(Term::cmpa(x.clone(), y.clone())))?;
+        self.require_premise(&Pred::Nonzero(Term::cmpae(z.clone(), 0.into())))?;
+        self.require_premise(&Pred::Nonzero(Term::cmpae(y.clone(), z.clone())))?;
+        self.preds.push(Pred::Nonzero(Term::cmpa(
+            Term::sub(x, z.clone()),
+            Term::sub(y, z),
+        )));
+        Ok(())
+    }
+
+    // TODO: add more derivation rules
 }
