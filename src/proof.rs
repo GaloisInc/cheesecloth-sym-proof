@@ -184,6 +184,20 @@ impl Proof {
         f(StepProof { prog: &self.prog, p })
     }
 
+    /// Prove `forall vars, preds vars -> ({pre} ->* {post})`, where `post` is derived from `pre`
+    /// via `f`.
+    pub fn tactic_step_prove(
+        &mut self,
+        vars: VarCounter,
+        preds: Vec<Pred>,
+        pre: State,
+        f: impl FnOnce(StepProof) -> Result<(), String>,
+    ) -> Result<LemmaId, String> {
+        let id = self.rule_step_zero(vars, preds, pre);
+        self.rule_step_extend(id, f)?;
+        Ok(id)
+    }
+
     /// Sequentially compose two `Prop::Step` lemmas.
     pub fn rule_step_seq<S1: Subst, S2: Subst>(
         &mut self,
@@ -258,6 +272,11 @@ impl Deref for StepProof<'_> {
 }
 
 impl StepProof<'_> {
+    pub fn show_next(&self) {
+        let instr = self.fetch_instr().unwrap();
+        eprintln!("next instr: {}: {:?}", self.p.post.pc, instr);
+    }
+
     /// Add a new predicate.  This becomes part of the precondition for applying this `Prop::Step`.
     ///
     /// The same effect can be achieved by including the predicate in the initial `preds` list when
@@ -467,7 +486,7 @@ impl StepProof<'_> {
 
         match instr.opcode {
             Opcode::Load(w) => {
-                let z = self.p.vars.var();
+                let z = self.p.vars.fresh();
                 self.p.post.set_reg(instr.rd, z);
             },
 
@@ -542,7 +561,7 @@ impl StepProof<'_> {
 
     /// Replace the value of `reg` with a fresh symbolic variable.
     pub fn rule_forget_reg(&mut self, reg: Reg) {
-        self.p.post.set_reg(reg, self.p.vars.var());
+        self.p.post.set_reg(reg, self.p.vars.fresh());
     }
 
     pub fn tactic_step_jmp_taken(&mut self) -> Result<(), String> {

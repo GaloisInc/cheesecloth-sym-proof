@@ -65,6 +65,9 @@ impl Term {
                 }
                 // When adding to an existing `x + c`, fold the constants together.
                 if let Some(bc) = b.as_const() {
+                    if bc == 0 {
+                        return a;
+                    }
                     if let TermInner::Binary(BinOp::Add, ref xy) = a.0 {
                         let (ref x, ref y) = **xy;
                         if let Some(yc) = y.as_const() {
@@ -76,6 +79,9 @@ impl Term {
             BinOp::Sub => {
                 // Turn `x - c` into `x + (-c)`.
                 if let Some(bc) = b.as_const() {
+                    if bc == 0 {
+                        return a;
+                    }
                     return Term::add(a, Term::const_(bc.wrapping_neg()));
                 }
             },
@@ -312,7 +318,7 @@ impl VarCounter {
         VarCounter(0)
     }
 
-    pub fn var(&mut self) -> Term {
+    pub fn fresh(&mut self) -> Term {
         let t = Term(TermInner::Var(self.0));
         self.0 += 1;
         t
