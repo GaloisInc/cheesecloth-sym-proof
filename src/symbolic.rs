@@ -2,7 +2,7 @@ use std::array;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
-use crate::{Word, Addr, BinOp};
+use crate::{Word, WORD_BYTES, Addr, BinOp};
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand};
 
 
@@ -40,6 +40,19 @@ impl Term {
         match self.0 {
             TermInner::Const(x) => Ok(x),
             ref t => Err(format!("expected const, but got {}", t)),
+        }
+    }
+
+    /// Create a new `Var` with a specific `VarId`.  There are no checks to ensure that the `VarId`
+    /// makes sense in context.  For generating fresh variables, use `VarCounter` instead.
+    pub fn var_unchecked(v: VarId) -> Term {
+        Term(TermInner::Var(v))
+    }
+
+    pub fn as_var(&self) -> Option<VarId> {
+        match self.0 {
+            TermInner::Var(v) => Some(v),
+            _ => None,
         }
     }
 
@@ -211,6 +224,19 @@ impl Term {
             },
         }
     }
+
+    pub fn as_var_plus_const(&self) -> Option<(VarId, Word)> {
+        match self.0 {
+            TermInner::Var(v) => Some((v, 0)),
+            TermInner::Binary(BinOp::Add, ref xy) => {
+                let v = xy.0.as_var()?;
+                let c = xy.1.as_const()?;
+                Some((v, c))
+            },
+            _ => None,
+        }
+    }
+
 }
 
 impl From<Word> for Term {
@@ -398,12 +424,8 @@ impl fmt::Display for Pred {
 
 
 pub trait Memory {
-    /// Store to a concrete address.
-    fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String>;
-    fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String>;
-
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String>;
-    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String>;
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, preds: &[Pred]) -> Result<(), String>;
+    fn load(&self, w: MemWidth, addr: Term, preds: &[Pred]) -> Result<Term, String>;
 }
 
 #[derive(Clone, Debug)]
@@ -416,41 +438,22 @@ pub enum MemState {
 }
 
 impl Memory for MemState {
-    fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, preds: &[Pred]) -> Result<(), String> {
         match *self {
-            MemState::Concrete(ref mut m) => m.store_concrete(w, addr, val),
-            MemState::Map(ref mut m) => m.store_concrete(w, addr, val),
-            MemState::Snapshot(ref mut m) => m.store_concrete(w, addr, val),
-            MemState::Log(ref mut m) => m.store_concrete(w, addr, val),
-            MemState::Multi(ref mut m) => m.store_concrete(w, addr, val),
+            MemState::Concrete(ref mut m) => m.store(w, addr, val, preds),
+            MemState::Map(ref mut m) => m.store(w, addr, val, preds),
+            MemState::Snapshot(ref mut m) => m.store(w, addr, val, preds),
+            MemState::Log(ref mut m) => m.store(w, addr, val, preds),
+            MemState::Multi(ref mut m) => m.store(w, addr, val, preds),
         }
     }
-    fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
+    fn load(&self, w: MemWidth, addr: Term, preds: &[Pred]) -> Result<Term, String> {
         match *self {
-            MemState::Concrete(ref m) => m.load_concrete(w, addr),
-            MemState::Map(ref m) => m.load_concrete(w, addr),
-            MemState::Snapshot(ref m) => m.load_concrete(w, addr),
-            MemState::Log(ref m) => m.load_concrete(w, addr),
-            MemState::Multi(ref m) => m.load_concrete(w, addr),
-        }
-    }
-
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
-        match *self {
-            MemState::Concrete(ref mut m) => m.store(w, addr, val),
-            MemState::Map(ref mut m) => m.store(w, addr, val),
-            MemState::Snapshot(ref mut m) => m.store(w, addr, val),
-            MemState::Log(ref mut m) => m.store(w, addr, val),
-            MemState::Multi(ref mut m) => m.store(w, addr, val),
-        }
-    }
-    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
-        match *self {
-            MemState::Concrete(ref m) => m.load(w, addr),
-            MemState::Map(ref m) => m.load(w, addr),
-            MemState::Snapshot(ref m) => m.load(w, addr),
-            MemState::Log(ref m) => m.load(w, addr),
-            MemState::Multi(ref m) => m.load(w, addr),
+            MemState::Concrete(ref m) => m.load(w, addr, preds),
+            MemState::Map(ref m) => m.load(w, addr, preds),
+            MemState::Snapshot(ref m) => m.load(w, addr, preds),
+            MemState::Log(ref m) => m.load(w, addr, preds),
+            MemState::Multi(ref m) => m.load(w, addr, preds),
         }
     }
 }
@@ -462,60 +465,100 @@ pub struct MemConcrete {
 }
 
 impl Memory for MemConcrete {
-    fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
-        if addr >= self.max {
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _preds: &[Pred]) -> Result<(), String> {
+        let addr = addr.as_const_or_err()
+            .map_err(|e| format!("when evaluating addr: {e}"))?;
+        if addr + w.bytes() >= self.max {
             return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
         }
         let val = val.as_const_or_err()
-            .map_err(|e| format!("in MemConcrete::store_concrete: {e}"))?;
+            .map_err(|e| format!("in MemConcrete::store: {e}"))?;
         micro_ram::mem_store(&mut self.m, w, addr, val);
         Ok(())
     }
-    fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
-        if addr >= self.max {
+    fn load(&self, w: MemWidth, addr: Term, _preds: &[Pred]) -> Result<Term, String> {
+        let addr = addr.as_const_or_err()
+            .map_err(|e| format!("when evaluating addr: {e}"))?;
+        if addr + w.bytes() >= self.max {
             return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
         }
         let val = micro_ram::mem_load(&self.m, w, addr);
         Ok(Term::const_(val))
-    }
-
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
-        let addr = addr.as_const_or_err()
-            .map_err(|e| format!("when evaluating addr: {e}"))?;
-        self.store_concrete(w, addr, val)
-    }
-    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
-        let addr = addr.as_const_or_err()
-            .map_err(|e| format!("when evaluating addr: {e}"))?;
-        self.load_concrete(w, addr)
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct MemMap {
     /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
-    /// `Term`.  The `u8` gives the index of the byte in little-endian order.
+    /// `Term`.  The `u8` gives the index of the byte to extract in little-endian order.
     pub m: HashMap<Addr, (Term, u8)>,
     pub max: Addr,
 }
 
 impl Memory for MemMap {
-    fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
-        let _ = (w, addr, val);
-        todo!("MemMap NYI")
-    }
-    fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
-        let _ = (w, addr);
-        todo!("MemMap NYI")
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _preds: &[Pred]) -> Result<(), String> {
+        let addr = addr.as_const_or_err()
+            .map_err(|e| format!("when evaluating addr: {e}"))?;
+        if addr + w.bytes() >= self.max {
+            return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
+        }
+        for offset in 0 .. w.bytes() {
+            self.m.insert(addr + offset, (val.clone(), offset as u8));
+        }
+        Ok(())
     }
 
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
-        let _ = (w, addr, val);
-        todo!("MemMap NYI")
-    }
-    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
-        let _ = (w, addr);
-        todo!("MemMap NYI")
+    fn load(&self, w: MemWidth, addr: Term, _preds: &[Pred]) -> Result<Term, String> {
+        let addr = addr.as_const_or_err()
+            .map_err(|e| format!("when evaluating addr: {e}"))?;
+        if addr + w.bytes() >= self.max {
+            return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
+        }
+
+        // We currently require the load to match a store exactly, so each consecutive address must
+        // contain the next consecutive byte in order (starting from zero), and all bytes should be
+        // extracted from the same expression.
+        let val = match self.m.get(&addr) {
+            Some(&(ref t, offset)) => {
+                if offset != 0 {
+                    return Err(format!("NYI: load requires splicing bytes: \
+                        at 0x{:x}, got offset {}, but expected 0", addr, offset));
+                }
+                t
+            },
+            None => {
+                return Err(format!("failed to load from address 0x{:x}: uninitialized data",
+                    addr));
+            },
+        };
+
+        for offset in 1 .. w.bytes() {
+            match self.m.get(&(addr + offset)) {
+                Some(&(ref t, loaded_offset)) => {
+                    if loaded_offset != offset as u8 {
+                        return Err(format!("NYI: load requires splicing bytes: \
+                            at 0x{:x}, got offset {}, but expected {}",
+                            addr + offset, loaded_offset, offset));
+                    }
+                    if t != val {
+                        return Err(format!("NYI: load requires splicing bytes: \
+                            at 0x{:x}, got term {}, but expected {}",
+                            addr + offset, t, val));
+                    }
+                },
+                None => {
+                    return Err(format!("failed to load from address 0x{:x}: uninitialized data",
+                        addr + offset));
+                },
+            }
+        }
+
+        let mut val = val.clone();
+        if w.bytes() < WORD_BYTES {
+            val = Term::and(val, Term::const_((1 << (8 * w.bytes())) - 1));
+        }
+
+        Ok(val)
     }
 }
 
@@ -525,20 +568,11 @@ pub struct MemSnapshot {
 }
 
 impl Memory for MemSnapshot {
-    fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _preds: &[Pred]) -> Result<(), String> {
         let _ = (w, addr, val);
         todo!("MemSnapshot NYI")
     }
-    fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
-        let _ = (w, addr);
-        todo!("MemSnapshot NYI")
-    }
-
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
-        let _ = (w, addr, val);
-        todo!("MemSnapshot NYI")
-    }
-    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
+    fn load(&self, w: MemWidth, addr: Term, _preds: &[Pred]) -> Result<Term, String> {
         let _ = (w, addr);
         todo!("MemSnapshot NYI")
     }
@@ -550,19 +584,11 @@ pub struct MemLog {
 }
 
 impl Memory for MemLog {
-    fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
-        self.store(w, Term::const_(addr), val)
-    }
-    fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
-        let _ = (w, addr);
-        Err("MemLog load_concrete NYI".into())
-    }
-
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _preds: &[Pred]) -> Result<(), String> {
         self.l.push((addr, val, w));
         Ok(())
     }
-    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
+    fn load(&self, w: MemWidth, addr: Term, _preds: &[Pred]) -> Result<Term, String> {
         let _ = (w, addr);
         Err("MemLog load NYI".into())
     }
@@ -586,30 +612,84 @@ pub struct MemMulti {
     pub sym: Vec<(Term, Term, MemState)>,
 }
 
+enum MemRegionKind {
+    Concrete,
+    Object,
+    Symbolic,
+}
+
+impl MemMulti {
+    fn region(&self, kind: MemRegionKind, i: usize) -> &MemState {
+        match kind {
+            MemRegionKind::Concrete => &self.conc[i].2,
+            MemRegionKind::Object => &self.objs[i].2,
+            MemRegionKind::Symbolic => &self.sym[i].2,
+        }
+    }
+
+    fn region_mut(&mut self, kind: MemRegionKind, i: usize) -> &mut MemState {
+        match kind {
+            MemRegionKind::Concrete => &mut self.conc[i].2,
+            MemRegionKind::Object => &mut self.objs[i].2,
+            MemRegionKind::Symbolic => &mut self.sym[i].2,
+        }
+    }
+
+    fn find_region(&self, addr: Term, preds: &[Pred]) -> Option<(Term, MemRegionKind, usize)> {
+        if let Some(addr) = addr.as_const() {
+            for (i, &(start, end, _)) in self.conc.iter().enumerate() {
+                if start <= addr && addr < end {
+                    return Some((Term::const_(addr - start), MemRegionKind::Concrete, i));
+                }
+            }
+        }
+
+        if let Some((var, offset)) = addr.as_var_plus_const() {
+            for (i, &(base, len, _)) in self.objs.iter().enumerate() {
+                if var == base && offset < len {
+                    return Some((Term::const_(offset), MemRegionKind::Object, i));
+                }
+            }
+        }
+
+        // General case: look for predicates showing that `addr` falls within the range.
+        let region_iter =
+            self.conc.iter().enumerate().map(|(i, &(start, end, _))| {
+                (Term::const_(start), Term::const_(end), MemRegionKind::Concrete, i)
+            })
+            .chain(self.objs.iter().enumerate().map(|(i, &(var, len, _))| {
+                let var = Term::var_unchecked(var);
+                (var.clone(), Term::add(var, Term::const_(len)), MemRegionKind::Object, i)
+            }))
+            .chain(self.sym.iter().enumerate().map(|(i, &(ref start, ref end, _))| {
+                (start.clone(), end.clone(), MemRegionKind::Symbolic, i)
+            }));
+        for (start, end, kind, i) in region_iter {
+            let lo = Pred::Nonzero(Term::cmpae(addr.clone(), start.clone()));
+            let hi = Pred::Nonzero(Term::cmpa(end, addr.clone()));
+            if preds.contains(&lo) && preds.contains(&hi) {
+                return Some((Term::sub(addr, start), kind, i));
+            }
+        }
+
+        None
+    }
+}
+
 impl Memory for MemMulti {
-    fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
-        let &mut (start, _end, ref mut mem) = self.conc.iter_mut()
-            .find(|&&mut (start, end, _)| start <= addr && addr + w.bytes() <= end)
-            .ok_or_else(|| format!("address 0x{addr:x} does not fall within a concrete region"))?;
-        let off = addr - start;
-        mem.store_concrete(w, off, val)
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, preds: &[Pred]) -> Result<(), String> {
+        let (offset, kind, i) = match self.find_region(addr.clone(), preds) {
+            Some(x) => x,
+            None => return Err(format!("couldn't find a region containing address {}", addr)),
+        };
+        self.region_mut(kind, i).store(w, offset, val, preds)
     }
-
-    fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
-        let &(start, _end, ref mem) = self.conc.iter()
-            .find(|&&(start, end, _)| start <= addr && addr + w.bytes() <= end)
-            .ok_or_else(|| format!("address 0x{addr:x} does not fall within a concrete region"))?;
-        let off = addr - start;
-        mem.load_concrete(w, off)
-    }
-
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term) -> Result<(), String> {
-        let _ = (w, addr, val);
-        todo!("MemMulti NYI")
-    }
-    fn load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
-        let _ = (w, addr);
-        todo!("MemMulti NYI")
+    fn load(&self, w: MemWidth, addr: Term, preds: &[Pred]) -> Result<Term, String> {
+        let (offset, kind, i) = match self.find_region(addr.clone(), preds) {
+            Some(x) => x,
+            None => return Err(format!("couldn't find a region containing address {}", addr)),
+        };
+        self.region(kind, i).load(w, offset, preds)
     }
 }
 

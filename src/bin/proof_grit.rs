@@ -144,11 +144,6 @@ fn run(path: &str) -> Result<(), String> {
         // We've reached a load instruction.  We don't care about the value, so just replace it
         // with a fresh variable.
         spf.rule_step_mem_load_fresh()?;
-        spf.tactic_run_concrete()?;
-        // We've reached a store.  The address is symbolic, which is why `step_concrete` failed on
-        // it.  `step_mem_symbolic` is more complex, but can handle some cases involving symbolic
-        // addresses.
-        spf.rule_step_mem_symbolic()?;
         // Keep running to complete the loop.
         spf.tactic_run_concrete_until(conc_state.pc)?;
 

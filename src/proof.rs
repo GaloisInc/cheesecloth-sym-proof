@@ -369,9 +369,14 @@ impl StepProof<'_> {
             Opcode::Cjmp => Err("can't use step_simple for Cjmp")?,
             Opcode::Cnjmp => Err("can't use step_simple for Cnjmp")?,
 
-            Opcode::Store(_) => Err("can't use step_simple for Store")?,
-            Opcode::Load(_) => Err("can't use step_simple for Load")?,
-            Opcode::Poison(_) => Err("can't use step_simple for Poison")?,
+            Opcode::Store(w) |
+            Opcode::Poison(w) => {
+                self.p.post.mem.store(w, y, x, &self.p.all_preds)?;
+            },
+            Opcode::Load(w) => {
+                let z = self.p.post.mem.load(w, y, &self.p.all_preds)?;
+                self.p.post.set_reg(instr.rd, z);
+            },
 
             Opcode::Answer => {
                 // Don't advance the PC.
@@ -425,62 +430,6 @@ impl StepProof<'_> {
         Ok(())
     }
 
-    /// Handle a memory instruction that accesses a concrete address and falls within a concrete
-    /// memory region.
-    pub fn rule_step_mem_concrete(&mut self) -> Result<(), String> {
-        let instr = self.fetch_instr()?;
-        let x = self.p.post.reg_value(instr.r1);
-        let y = self.p.post.operand_value(instr.op2);
-
-        let addr = y.as_const_or_err()
-            .map_err(|e| format!("when evaluating addr: {e}"))?;
-
-        match instr.opcode {
-            Opcode::Store(w) |
-            Opcode::Poison(w) => {
-                self.p.post.mem.store_concrete(w, addr, x)?;
-            },
-
-            Opcode::Load(w) => {
-                let z = self.p.post.mem.load_concrete(w, addr)?;
-                self.p.post.set_reg(instr.rd, z);
-            },
-
-            op => Err(format!("can't use step_mem_concrete for {:?}", op))?,
-        }
-
-        eprintln!("run {}: {:?} (mem_concrete)", self.pc, instr);
-        self.p.post.pc += 1;
-        self.p.post.increment_cycle();
-        Ok(())
-    }
-
-    /// Handle a memory instruction that accesses a symbolic address but requires no preconditions.
-    pub fn rule_step_mem_symbolic(&mut self) -> Result<(), String> {
-        let instr = self.fetch_instr()?;
-        let x = self.p.post.reg_value(instr.r1);
-        let y = self.p.post.operand_value(instr.op2);
-
-        match instr.opcode {
-            Opcode::Store(w) |
-            Opcode::Poison(w) => {
-                self.p.post.mem.store(w, y, x)?;
-            },
-
-            Opcode::Load(w) => {
-                let z = self.p.post.mem.load(w, y)?;
-                self.p.post.set_reg(instr.rd, z);
-            },
-
-            op => Err(format!("can't use step_mem_symbolic for {:?}", op))?,
-        }
-
-        eprintln!("run {}: {:?} (mem_symbolic)", self.pc, instr);
-        self.p.post.pc += 1;
-        self.p.post.increment_cycle();
-        Ok(())
-    }
-
     /// Handle a load instruction by introducing a fresh variable for the result.  This gives no
     /// information about the value that was actually loaded.
     pub fn rule_step_mem_load_fresh(&mut self) -> Result<(), String> {
@@ -508,15 +457,14 @@ impl StepProof<'_> {
             Opcode::Not |
             Opcode::Mov |
             Opcode::Cmov |
+            Opcode::Store(_) |
+            Opcode::Poison(_) |
+            Opcode::Load(_) |
             Opcode::Answer => self.rule_step_simple(),
 
             Opcode::Jmp |
             Opcode::Cjmp |
             Opcode::Cnjmp => self.rule_step_jmp_concrete(),
-
-            Opcode::Store(_) |
-            Opcode::Poison(_) |
-            Opcode::Load(_) => self.rule_step_mem_concrete(),
 
             op => Err(format!("can't use step_concrete for {:?}", op)),
         }
