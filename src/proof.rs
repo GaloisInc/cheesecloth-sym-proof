@@ -30,7 +30,8 @@ impl Prop {
 
 
 /// For all `x0 ... xN` (`vars`) such that `preds` hold, and for every concrete state `s` such that
-/// `pre(s)` holds, there exists some `M` and `s'` such that `s ->M s'` and `post(s')` holds.
+/// `pre(s)` holds, there exists some `M` and `s'` such that `M >= min_cycles` and `s ->M s'` and
+/// `post(s')` holds.
 ///
 /// Note this is a total correctness statement, not partial correctness, because we require that a
 /// valid post state exists and is reachable in a finite number of steps.
@@ -43,6 +44,9 @@ pub struct StepProp {
     num_base_preds: usize,
     pre: State,
     post: State,
+    /// Minimum number of cycles spent in the execution.  From any state matching `pre`, it's
+    /// possible to take at least this many steps and end in a state matching `post`.
+    min_cycles: Word,
 }
 
 impl StepProp {
@@ -64,6 +68,10 @@ impl StepProp {
 
     pub fn post(&self) -> &State {
         &self.post
+    }
+    
+    pub fn min_cycles(&self) -> Word {
+        self.min_cycles
     }
 
     /// Append `pred` to the list of base predicates.
@@ -173,6 +181,7 @@ impl Proof {
             all_preds: preds,
             pre: state.clone(),
             post: state,
+            min_cycles: 0,
         }))
     }
 
@@ -233,14 +242,6 @@ impl Proof {
             }
         }
 
-        if !Term::check_eq_subst(&s1.cycle, &mut subst1, &s2.cycle, &mut subst2) {
-            return Err(format!(
-                "after substitution, middle state 1 has cycle = {}, \
-                but middle state 2 has cycle = {}",
-                s1.cycle.subst(&mut subst1), s2.cycle.subst(&mut subst2),
-            ));
-        }
-
         // FIXME: check equality of `s1.mem` and `s2.mem`
         eprintln!("ADMITTED: rule_step_seq memory equivalence");
 
@@ -256,6 +257,7 @@ impl Proof {
             all_preds: preds,
             pre: p1.pre.subst(&mut subst1),
             post: p2.post.subst(&mut subst2),
+            min_cycles: p1.min_cycles + p2.min_cycles,
         })))
     }
 }
@@ -388,7 +390,7 @@ impl StepProof<'_> {
 
         eprintln!("run {}: {:?} (simple)", self.pc, instr);
         self.p.post.pc += 1;
-        self.p.post.increment_cycle();
+        self.p.min_cycles += 1;
         Ok(())
     }
 
@@ -426,7 +428,7 @@ impl StepProof<'_> {
         }
 
         eprintln!("run {}: {:?} (jmp_concrete)", old_pc, instr);
-        self.p.post.increment_cycle();
+        self.p.min_cycles += 1;
         Ok(())
     }
 
@@ -446,7 +448,7 @@ impl StepProof<'_> {
 
         eprintln!("run {}: {:?} (mem_load_fresh)", self.pc, instr);
         self.p.post.pc += 1;
-        self.p.post.increment_cycle();
+        self.p.min_cycles += 1;
         Ok(())
     }
 

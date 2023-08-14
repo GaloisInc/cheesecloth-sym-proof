@@ -706,7 +706,6 @@ impl Memory for MemMulti {
 #[derive(Clone, Debug)]
 pub struct State {
     pub pc: Word,
-    pub cycle: Term,
     pub regs: [Term; NUM_REGS],
     pub mem: MemState,
 }
@@ -714,19 +713,14 @@ pub struct State {
 impl State {
     pub fn new(
         pc: Word,
-        cycle: Term,
         regs: [Term; NUM_REGS],
         mem: MemState,
     ) -> State {
-        State { pc, cycle, regs, mem }
+        State { pc, regs, mem }
     }
 
     pub fn pc(&self) -> Word {
         self.pc
-    }
-
-    pub fn cycle(&self) -> &Term {
-        &self.cycle
     }
 
     pub fn regs(&self) -> &[Term; NUM_REGS] {
@@ -752,10 +746,6 @@ impl State {
         self.regs[reg as usize] = val;
     }
 
-    pub fn increment_cycle(&mut self) {
-        self.cycle = Term::increment(self.cycle.clone(), 1);
-    }
-
     pub fn subst<S: Subst>(&self, subst: &mut S) -> State {
         if S::IS_IDENTITY {
             return self.clone();
@@ -766,7 +756,6 @@ impl State {
 
         State {
             pc: self.pc,
-            cycle: self.cycle.subst(subst),
             regs: array::from_fn(|i| self.regs[i].subst(subst)),
             mem: self.mem.clone(),
         }
@@ -784,12 +773,6 @@ impl State {
                 return Err(format!("symbolic r{} {} = {} does not match concrete r{} {}",
                     i, sym_reg, sym_reg_val, i, conc_reg));
             }
-        }
-
-        let cycle = self.cycle.eval(vars);
-        if cycle != conc.cycle {
-            return Err(format!("symbolic cycle {} = {} does not match concrete cycle {}",
-                self.cycle, cycle, conc.cycle));
         }
 
         // FIXME: check mem

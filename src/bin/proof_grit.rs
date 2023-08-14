@@ -65,9 +65,9 @@ fn run(path: &str) -> Result<(), String> {
     // We want to prove a lemma along the lines of:
     //
     //  forall C R12,
-    //  { pc = 123 /\ cycle = C /\ r0 = 0 /\ r12 = R12 /\ R12 > 0 }
-    //      ->*
-    //  { pc = 123 /\ cycle = C + 13 /\ r0 = 0 /\ r12 = R12 - 1 }
+    //  { pc = 123 /\ r0 = 0 /\ r12 = R12 /\ R12 > 0 }
+    //      ->13
+    //  { pc = 123 /\ r0 = 0 /\ r12 = R12 - 1 }
     //
     // Register r12 is the `n` argument to `memcpy`, which indicates the number of bytes to copy.
     // In the implementation used in `grit`, `n` is decremented each time around the loop until it
@@ -97,12 +97,8 @@ fn run(path: &str) -> Result<(), String> {
         // this would be a value of type `bool`, not the `Prop` `x > y`.
         Pred::Nonzero(Term::cmpa(regs[12].clone(), Term::const_(0))),
     ];
-    // We place no constraints on the initial value of the cycle counter.  This makes the lemma
-    // applicable no matter how many loop iterations we previously performed.
-    let cycle = vars.fresh();
     let state = State::new(
         conc_state.pc,
-        cycle.clone(),
         regs.clone(),
         mem,
     );
@@ -168,7 +164,7 @@ fn run(path: &str) -> Result<(), String> {
         for i in 0 .. NUM_REGS {
             eprintln!("{:2}: {} -> {}", i, p.pre().regs()[i], p.post().regs()[i]);
         }
-        eprintln!("cycle: {} -> {}", p.pre().cycle, p.post().cycle);
+        eprintln!("min_cycles: {}", p.min_cycles());
         for pred in p.preds() {
             eprintln!("pred: {}", pred);
         }
@@ -229,7 +225,7 @@ fn run(path: &str) -> Result<(), String> {
             // ensures every lemma in `l_loops` has the same meaning for its variables.
 
             // `rest` gives fresh variables for unused registers and other cases not covered below.
-            let rest: [Option<Term>; 40] = array::from_fn(|_| Some(vars.fresh()));
+            let rest: [Option<Term>; 39] = array::from_fn(|_| Some(vars.fresh()));
             let mut rest1 = rest.clone();
             let mut rest2 = rest.clone();
 
@@ -251,26 +247,18 @@ fn run(path: &str) -> Result<(), String> {
             let mut n2 = Some(Term::add(n1.clone().unwrap(),
                 Term::const_(-(m1 as i64) as u64)));
 
-            // We use a similar scheme for the cycle number, which is `x33`.  Each iteration is 13
-            // cycles, so the middle state has `cycle = y33 + 13 * m1`.
-            let mut cycle1 = rest[33].clone();
-            let mut cycle2 = Some(Term::add(cycle1.clone().unwrap(),
-                Term::const_(13 * m1)));
-
             (
                 SubstTable::new(move |v| match v {
                     12 => n1.take().unwrap(),
-                    33 => cycle1.take().unwrap(),
-                    35 => forgotten1[0].take().unwrap(),
-                    36 => forgotten1[1].take().unwrap(),
-                    37 => forgotten1[2].take().unwrap(),
-                    38 => forgotten1[3].take().unwrap(),
-                    39 => forgotten1[4].take().unwrap(),
+                    34 => forgotten1[0].take().unwrap(),
+                    35 => forgotten1[1].take().unwrap(),
+                    36 => forgotten1[2].take().unwrap(),
+                    37 => forgotten1[3].take().unwrap(),
+                    38 => forgotten1[4].take().unwrap(),
                     _ => rest1[v].take().unwrap(),
                 }),
                 SubstTable::new(move |v| match v {
                     12 => n2.take().unwrap(),
-                    33 => cycle2.take().unwrap(),
                     11 => forgotten2[0].take().unwrap(),
                     13 => forgotten2[1].take().unwrap(),
                     14 => forgotten2[2].take().unwrap(),
@@ -361,14 +349,13 @@ fn run(path: &str) -> Result<(), String> {
     // StepProp lets us assert that a bunch of registers are zero after the loop, which is false.
     let conc_subst: [Word; 40] = array::from_fn(|i| match i {
         0 ..= 32 => conc_state.regs[i],
-        33 => conc_state.cycle,
         _ => 0,
     });
     p.check_pre_concrete(&conc_subst, &conc_state)?;
 
     // The postcondition must hold under the same substitution, so we can compute the final cycle
     // count.
-    let post_cycle = p.post().cycle.eval(&conc_subst);
+    let post_cycle = conc_state.cycle + p.min_cycles();
     eprintln!("cycle count: {} -> {}", conc_state.cycle, post_cycle);
 
     assert!(post_cycle > 1000);
