@@ -1,610 +1,520 @@
 use std::collections::HashMap;
+use std::mem;
 use std::ops::Deref;
 use crate::{Word, Addr};
-use crate::symbolic::{State, Term, Pred, Memory, VarCounter, Subst};
-use crate::micro_ram::{self, Instr, Opcode, Reg};
+use crate::logic::{
+    Term, VarId, VarCounter, Binder, Prop, StepProp, ReachableProp, StatePred, Subst, SubstTable,
+    IdentitySubsts, EqAlpha,
+};
+use crate::symbolic::{self, Memory};
+use crate::micro_ram::{self, Instr, Opcode, Reg, Operand, MemWidth};
 
 
-#[derive(Clone, Debug)]
-pub enum Prop {
-    Step(StepProp),
+
+pub struct Proof<'a> {
+    prog: &'a HashMap<u64, Instr>,
+    /// Enclosing scopes.  `scopes[0]` is the innermost and `scopes.last()` is the outermost.  For
+    /// each one, we have a `u32` scope ID (as returned by `VarId::scope`) and a list of
+    /// propositions that are known to hold over the variables of that scope and outer scopes.
+    scopes: Box<[(u32, &'a mut Vec<Prop>)]>,
 }
 
-impl Prop {
-    pub fn as_step(&self) -> Result<&StepProp, String> {
-        match *self {
-            Prop::Step(ref p) => Ok(p),
-            #[allow(unreachable_patterns)]
-            ref prop => Err(format!("expected Prop::Step, but got {:?}", prop)),
+impl<'a> Proof<'a> {
+    pub fn prove(
+        prog: &HashMap<u64, Instr>,
+        f: impl FnOnce(&mut Proof) -> Result<(), String>,
+    ) -> Result<Vec<Prop>, String> {
+        let mut props = Vec::new();
+        f(&mut Proof {
+            prog,
+            scopes: Box::new([(0, &mut props)]),
+        })?;
+        Ok(props)
+    }
+
+    /// Enter a nested scope with `props` as premises.  This mutates `props` into a collection of
+    /// `Prop`s that are implied by the original premises.
+    fn enter<R>(
+        &mut self,
+        scope: u32,
+        props: &mut Vec<Prop>,
+        f: impl FnOnce(&mut Proof) -> Result<R, String>,
+    ) -> Result<R, String> {
+        self.enter_owned(scope, props, |mut pf| f(&mut pf))
+    }
+
+    fn enter_owned<R>(
+        &mut self,
+        scope: u32,
+        props: &mut Vec<Prop>,
+        f: impl FnOnce(Proof) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let mut scopes = Vec::with_capacity(self.scopes.len() + 1);
+        scopes.push((scope, props));
+        for &mut (s, ref mut ps) in self.scopes.iter_mut() {
+            scopes.push((s, ps));
         }
+        let scopes = scopes.into_boxed_slice();
+
+        f(Proof { prog: self.prog, scopes })
     }
 
-    pub fn as_step_mut(&mut self) -> Result<&mut StepProp, String> {
-        match *self {
-            Prop::Step(ref mut p) => Ok(p),
-            #[allow(unreachable_patterns)]
-            ref prop => Err(format!("expected Prop::Step, but got {:?}", prop)),
+    fn reenter_owned<R>(
+        &mut self,
+        f: impl FnOnce(Proof) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let mut scopes = Vec::with_capacity(self.scopes.len());
+        for &mut (s, ref mut ps) in self.scopes.iter_mut() {
+            scopes.push((s, &mut **ps));
         }
-    }
-}
+        let scopes = scopes.into_boxed_slice();
 
-
-/// For all `x0 ... xN` (`vars`) such that `preds` hold, and for every concrete state `s` such that
-/// `pre(s)` holds, there exists some `M` and `s'` such that `M >= min_cycles` and `s ->M s'` and
-/// `post(s')` holds.
-///
-/// Note this is a total correctness statement, not partial correctness, because we require that a
-/// valid post state exists and is reachable in a finite number of steps.
-#[derive(Clone, Debug)]
-pub struct StepProp {
-    vars: VarCounter,
-    /// The `preds` of this proposition, plus some additional derived predicates that are used
-    /// internally.  The first `num_base_preds` are sufficient to imply the rest.
-    all_preds: Vec<Pred>,
-    num_base_preds: usize,
-    pre: State,
-    post: State,
-    /// Minimum number of cycles spent in the execution.  From any state matching `pre`, it's
-    /// possible to take at least this many steps and end in a state matching `post`.
-    min_cycles: Word,
-}
-
-impl StepProp {
-    pub fn preds(&self) -> &[Pred] {
-        &self.all_preds[..self.num_base_preds]
+        f(Proof { prog: self.prog, scopes })
     }
 
-    pub fn derived_preds(&self) -> &[Pred] {
-        &self.all_preds[self.num_base_preds..]
-    }
-
-    pub fn all_preds(&self) -> &[Pred] {
-        &self.all_preds
-    }
-
-    pub fn pre(&self) -> &State {
-        &self.pre
-    }
-
-    pub fn post(&self) -> &State {
-        &self.post
-    }
-    
-    pub fn min_cycles(&self) -> Word {
-        self.min_cycles
-    }
-
-    /// Append `pred` to the list of base predicates.
-    pub fn push_pred(&mut self, pred: Pred) {
-        let i = self.num_base_preds;
-        let j = self.all_preds.len();
-        // We want to insert `pred` at `i`, after the last base predicate, but it's cheaper to push
-        // it at `j` and then swap it into place.
-        self.all_preds.push(pred);
-        if i != j {
-            self.all_preds.swap(i, j);
-        }
-        self.num_base_preds += 1;
-    }
-
-    /// Append `pred` to the list of derived predicates.
-    pub fn push_derived_pred(&mut self, pred: Pred) {
-        self.all_preds.push(pred);
-    }
-
-    /// Convert predicate `i` from a base predicate to a derived predicate.
-    pub fn base_to_derived_pred(&mut self, i: usize) {
-        assert!(i < self.num_base_preds);
-        let j = self.num_base_preds - 1;
-        if i != j {
-            self.all_preds.swap(i, j);
-        }
-        self.num_base_preds -= 1;
-    }
-
-    /// Check that a concrete state satisfies the precondition under the provided evaluation of the
-    /// `vars`.
-    pub fn check_pre_concrete(
-        &self,
-        vars: &[Word],
-        conc: &micro_ram::State,
-    ) -> Result<(), String> {
-        self.pre.check_eq_concrete(vars, conc)?;
-        for pred in self.preds() {
-            if !pred.eval(vars) {
-                return Err(format!("predicate {} does not hold on concrete evaluation", pred));
+    pub fn show_context(&self) {
+        for (i, &(_, ref ps)) in self.scopes.iter().rev().enumerate() {
+            for (j, p) in ps.iter().enumerate() {
+                eprintln!("{}.{}: {}", i, j, p);
             }
         }
-        Ok(())
-    }
-}
-
-
-/// A collection of facts that have been proved so far.
-///
-/// In addition to appending new lemmas to the list, in some cases it's possible to mutate an
-/// existing lemma.  In particular, if `P` implies `Q`, we might implement a rule that mutates `P`
-/// to produce `Q`.  If you want the traditional behavior where applying the rule with `P` in scope
-/// introduces a new `Q` lemma, clone the `P` lemma first using `rule_clone` and then apply the
-/// mutating rule.
-///
-/// Naming convention: Functions named `rule_*` are the primitive rules of the proof system;
-/// soundness of the system depends on their correctness.  Functions named `tactic_*` call other
-/// rules and tactics, but don't directly manipulate the proof state, so they cannot introduce
-/// unsoundness.
-pub struct Proof {
-    /// The program.  This is stored in the proof state to ensure that all lemmas are using the
-    /// same program.
-    prog: HashMap<u64, Instr>,
-
-    lemmas: Vec<Prop>,
-}
-
-pub type LemmaId = usize;
-
-impl Proof {
-    pub fn new(prog: HashMap<u64, Instr>) -> Proof {
-        Proof {
-            prog,
-            lemmas: Vec::new(),
-        }
     }
 
-    pub fn prog(&self) -> &HashMap<u64, Instr> {
-        &self.prog
+    fn get_prop(&self, depth: usize, index: usize) -> &Prop {
+        let scope = self.scopes.len() - 1 - depth;
+        &self.scopes[scope].1[index]
     }
 
-    pub fn lemma(&self, id: LemmaId) -> &Prop {
-        &self.lemmas[id]
-    }
-
-    fn add_lemma(&mut self, lemma: Prop) -> LemmaId {
-        let i = self.lemmas.len();
-        self.lemmas.push(lemma);
+    fn add_prop(&mut self, prop: Prop) -> usize {
+        let depth = self.scopes.len();
+        let props = &mut self.scopes[0].1;
+        let i = props.len();
+        println!("proved {}.{}: {}", depth - 1, i, prop);
+        props.push(prop);
         i
     }
 
-    /// Clone an existing lemma.  This is useful if you want to mutate a lemma but still keep the
-    /// original.
-    pub fn rule_clone(&mut self, id: LemmaId) -> LemmaId {
-        self.add_lemma(self.lemmas[id].clone())
+    /// Duplicate a `Prop` in scope.  This can only be applied to the innermost scope.
+    pub fn rule_clone(&mut self, index: usize) -> usize {
+        let prop = self.scopes[0].1[index].clone();
+        self.add_prop(prop)
     }
 
-    /// Introduce `{P} ->* {P}`.  Every state steps to itself in zero steps.
-    ///
-    /// All vars mentioned in `preds` and `state` must have been produced by `vars`.  Currently,
-    /// this is not checked.
-    pub fn rule_step_zero(&mut self, vars: VarCounter, preds: Vec<Pred>, state: State) -> LemmaId {
-        self.add_lemma(Prop::Step(StepProp {
-            vars,
-            num_base_preds: preds.len(),
-            all_preds: preds,
-            pre: state.clone(),
-            post: state,
-            min_cycles: 0,
-        }))
+    pub fn admit(&mut self, prop: Prop) -> usize {
+        println!("ADMITTED: {}", prop);
+        self.add_prop(prop)
     }
 
-    /// Extend a `Prop::Step` lemma by adding more steps.
-    pub fn rule_step_extend<R>(
-        &mut self,
-        id: LemmaId,
-        f: impl FnOnce(StepProof) -> Result<R, String>,
-    ) -> Result<R, String> {
-        let p = self.lemmas[id].as_step_mut()?;
-        f(StepProof { prog: &self.prog, p })
-    }
-
-    /// Prove `forall vars, preds vars -> ({pre} ->* {post})`, where `post` is derived from `pre`
-    /// via `f`.
-    pub fn tactic_step_prove(
-        &mut self,
-        vars: VarCounter,
-        preds: Vec<Pred>,
-        pre: State,
-        f: impl FnOnce(StepProof) -> Result<(), String>,
-    ) -> Result<LemmaId, String> {
-        let id = self.rule_step_zero(vars, preds, pre);
-        self.rule_step_extend(id, f)?;
-        Ok(id)
-    }
-
-    /// Sequentially compose two `Prop::Step` lemmas.
-    pub fn rule_step_seq<S1: Subst, S2: Subst>(
-        &mut self,
-        id1: LemmaId,
-        id2: LemmaId,
-        mk_substs: impl FnOnce(&mut VarCounter) -> (S1, S2),
-    ) -> Result<LemmaId, String> {
-        let p1 = self.lemmas[id1].as_step()?;
-        let p2 = self.lemmas[id2].as_step()?;
-        let s1 = &p1.post;
-        let s2 = &p2.pre;
-
-        let mut vars = VarCounter::new();
-        let (mut subst1, mut subst2) = mk_substs(&mut vars);
-
-        if s1.pc != s2.pc {
-            return Err(format!(
-                "middle state 1 has pc = {}, but middle state 2 has pc = {}",
-                s1.pc, s2.pc,
-            ));
-        }
-
-        for (i, (r1, r2)) in s1.regs.iter().zip(s2.regs.iter()).enumerate() {
-            if !Term::check_eq_subst(r1, &mut subst1, r2, &mut subst2) {
-                return Err(format!(
-                    "after substitution, middle state 1 has r{} = {}, \
-                    but middle state 2 has r{} = {} (eq? {})",
-                    i, r1.subst(&mut subst1).clone(), i, r2.subst(&mut subst2).clone(),
-                    r1.subst(&mut subst1).clone() == r2.subst(&mut subst2).clone(),
-                ));
+    /// Ensure that `premise` appears somewhere in the current scope.
+    fn require_premise(&self, premise: &Prop) -> Result<(), String> {
+        for s in self.scopes.iter() {
+            for p in s.1.iter() {
+                if premise.check_eq(p) {
+                    return Ok(())
+                }
             }
         }
 
-        // FIXME: check equality of `s1.mem` and `s2.mem`
-        eprintln!("ADMITTED: rule_step_seq memory equivalence");
+        Err(format!("missing premise: {}", premise))
+    }
 
-        // We only care about the base predicates here.  The derived predicates can be dropped (and
-        // rederived later, if needed).
-        let preds = p1.preds().iter().map(|p| p.subst(&mut subst1))
-            .chain(p2.preds().iter().map(|p| p.subst(&mut subst2)))
-            .collect::<Vec<_>>();
+    /// Apply a `Prop::Forall` to arguments.  `subst` provides `Term`s to be substituted for the
+    /// bound variables.  After substitution, the premises of the `Forall` are required to hold,
+    /// and the conclusion is introduced into the current scope.
+    // FIXME (unsound): restrict what subst can be performed here
+    pub fn rule_apply(
+        &mut self,
+        depth: usize,
+        index: usize,
+        subst: &mut impl Subst,
+    ) -> Result<usize, String> {
+        let prop = self.get_prop(depth, index);
+        let binder = match *prop {
+            Prop::Forall(ref b) => b,
+            _ => return Err(format!("rule_apply: expected forall, but got {}", prop)),
+        };
 
-        Ok(self.add_lemma(Prop::Step(StepProp {
-            vars,
-            num_base_preds: preds.len(),
-            all_preds: preds,
-            pre: p1.pre.subst(&mut subst1),
-            post: p2.post.subst(&mut subst2),
-            min_cycles: p1.min_cycles + p2.min_cycles,
-        })))
+        let (ref premises, ref conclusion) = binder.inner;
+        for premise in premises {
+            self.require_premise(&premise.subst(subst))?;
+        }
+
+        Ok(self.add_prop(conclusion.subst(subst)))
+    }
+
+    pub fn tactic_apply0(
+        &mut self,
+        depth: usize,
+        index: usize,
+    ) -> Result<usize, String> {
+        self.rule_apply(depth, index, &mut IdentitySubsts::new())
+    }
+
+    fn next_scope(&self) -> u32 {
+        let scope = self.scopes.len() as u32;
+        assert!(self.scopes.iter().all(|s| s.0 != scope));
+        scope
+    }
+
+    /// Prove a theorem of the form `forall xs, Ps(xs) => Q(xs)`.  `mk_premises` sets up `xs` and
+    /// `Ps`, and it can return some extra data such as `VarId`s to be passed to `prove`.  `prove`
+    /// derives some conclusion from the premises.  After running `prove`, the final `Prop` it
+    /// proved becomes the conclusion of the `forall`.
+    pub fn rule_forall_intro<T>(
+        &mut self,
+        mk_premises: impl FnOnce(&mut VarCounter) -> (Vec<Prop>, T),
+        prove: impl FnOnce(&mut Proof, T) -> Result<(), String>,
+    ) -> Result<usize, String> {
+        let scope = self.next_scope();
+
+        let inner_depth = self.scopes.len();
+        let b = Binder::try_new(scope, |vars| {
+            let (mut props, extra) = mk_premises(vars);
+            let premises = props.clone();
+            for (i, p) in premises.iter().enumerate() {
+                eprintln!("introduced {}.{}: {}", inner_depth, i, p);
+            }
+            self.enter(scope, &mut props, |pf| prove(pf, extra))?;
+            let conclusion = props.pop().unwrap();
+            Ok((premises, Box::new(conclusion)))
+        })?;
+        Ok(self.add_prop(Prop::Forall(b)))
+    }
+
+    pub fn tactic_implies_intro(
+        &mut self,
+        premises: Vec<Prop>,
+        prove: impl FnOnce(&mut Proof) -> Result<(), String>,
+    ) -> Result<usize, String> {
+        self.rule_forall_intro(
+            |_| (premises, ()),
+            |pf, ()| prove(pf),
+        )
+    }
+
+    /// Prove a trivial `Prop::Step` of the form `{P} ->0 {P}`.
+    pub fn rule_step_zero(
+        &mut self,
+        f: impl FnOnce(&mut VarCounter) -> StatePred,
+    ) -> usize {
+        let scope = self.next_scope();
+        let pred = Binder::new(scope, f);
+        let prop = Prop::Step(StepProp {
+            pre: pred.clone(),
+            post: pred,
+            min_cycles: 0.into(),
+        });
+        self.add_prop(prop)
+    }
+
+    /// Extend a `Prop::Step`, mutating it into another `Prop::Step` that's implied by the
+    /// original.
+    pub fn rule_step_extend<R>(
+        &mut self,
+        index: usize,
+        f: impl FnOnce(&mut StepProof) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let dummy_prop = Prop::Nonzero(1.into());
+        let mut sp = match mem::replace(&mut self.scopes[0].1[index], dummy_prop) {
+            Prop::Step(sp) => sp,
+            prop => {
+                let msg = format!("rule_step_extend expected step, but got {}", prop);
+                self.scopes[0].1[index] = prop;
+                return Err(msg);
+            },
+        };
+        let r = self.reenter_owned(|pf| {
+            f(&mut StepProof { pf, sp: &mut sp })
+        });
+        self.scopes[0].1[index] = Prop::Step(sp);
+        r
+    }
+
+    /// Admit as an axiom that the program can execute at least `min_cycles` and end in the given
+    /// state.
+    pub fn admit_reachable(
+        &mut self,
+        min_cycles: Term,
+        f: impl FnOnce(&mut VarCounter) -> StatePred,
+    ) -> usize {
+        let scope = self.next_scope();
+        let pred = Binder::new(scope, f);
+        let prop = Prop::Reachable(ReachableProp { pred, min_cycles });
+        self.add_prop(prop)
+    }
+
+    /// ```
+    /// forall (Hzero: P 0),
+    /// forall (Hsucc: forall n, (n + 1 > 0) -> P n -> P (n + 1)),
+    /// (forall n, P n)
+    /// ```
+    ///
+    /// This is equivalent to Coq's `nat_ind`, except `Hsucc` gets the extra premise `n + 1 > 0`,
+    /// which means the inductive case only needs to hold in cases where `n + 1` doesn't overflow.
+    /// This is still sufficient to prove `forall n, P n` by the following reasoning: `P 0 -> P 1
+    /// -> ... -> P (2^64 - 2) -> P (2^64 - 1)`.  We can't extend this chain any further because
+    /// `Hsucc` no longer applies (`(2^64 - 1) + 1 = 0`), but we've already covered all 2^64
+    /// possible values of `n`.
+    pub fn rule_induction(
+        &mut self,
+        zero_depth: usize,
+        zero_index: usize,
+        succ_depth: usize,
+        succ_index: usize,
+    ) -> Result<usize, String> {
+        // Check that `Hsucc` has the form `forall n, P n -> P (n + 1)`.
+        let succ_prop = self.get_prop(succ_depth, succ_index);
+        let succ_b = match succ_prop {
+            &Prop::Forall(ref b) => b,
+            ref p => return Err(format!("expected Hsucc to be a forall, but got {}", p)),
+        };
+
+        let vars = &succ_b.vars;
+        if vars.len() != 1 {
+            return Err(format!(
+                "expected Hsucc to bind exactly one variable, but got {}", succ_prop));
+        }
+        let scope = vars.scope();
+        let var = VarId::new(scope, 0);
+
+        let (ref premises, ref conclusion) = succ_b.inner;
+        if premises.len() != 2 {
+            return Err(format!(
+                "expected Hsucc to have exactly two premises, but got {}", succ_prop));
+        }
+        let no_overflow = &premises[0];
+        let predicate = &premises[1];
+
+        let expect_no_overflow = Prop::Nonzero(
+            Term::cmpa(Term::add(Term::var_unchecked(var), 1.into()), 0.into()));
+        if !EqAlpha::compare_props(&no_overflow, &expect_no_overflow) {
+            return Err(format!("expected Hsucc first premise to be ({}), but got ({})",
+                expect_no_overflow, no_overflow));
+        }
+
+        let expect_conclusion = predicate.subst(&mut SubstTable::new(|v| {
+            if v == var {
+                Term::add(Term::var_unchecked(v), 1.into())
+            } else {
+                Term::var_unchecked(v)
+            }
+        }));
+        if !EqAlpha::compare_props(&conclusion, &expect_conclusion) {
+            return Err(format!("expected Hsucc conclusion to be ({}), but got ({})",
+                expect_conclusion, conclusion));
+        }
+
+        // We have now extracted `P` as `predicate`.
+
+        // Check that `Hzero` has the form `P 0`.
+        let zero_prop = self.get_prop(zero_depth, zero_index);
+        let expect_zero = predicate.subst(&mut SubstTable::new(|v| {
+            if v == var {
+                0.into()
+            } else {
+                Term::var_unchecked(v)
+            }
+        }));
+        if !EqAlpha::compare_props(&zero_prop, &expect_zero) {
+            return Err(format!("expected Hzero to be ({}), but got ({})",
+                expect_zero, zero_prop));
+        }
+
+        // Add `forall n, P n`.
+        Ok(self.add_prop(Prop::Forall(Binder::new(scope, |vars| {
+            assert_eq!(vars.fresh_var(), var);
+            (Vec::new(), Box::new(predicate.clone()))
+        }))))
+    }
+
+    pub fn rule_gt_ne_unsigned(&mut self, x: Term, y: Term) -> Result<(), String> {
+        self.require_premise(&Prop::Nonzero(Term::cmpa(x.clone(), y.clone())))?;
+        self.add_prop(Prop::Nonzero(Term::cmpe(Term::cmpe(x.clone(), y.clone()), 0.into())));
+        Ok(())
     }
 }
 
 
 pub struct StepProof<'a> {
-    prog: &'a HashMap<u64, Instr>,
-    p: &'a mut StepProp,
+    pf: Proof<'a>,
+    sp: &'a mut StepProp,
 }
 
-impl Deref for StepProof<'_> {
-    type Target = State;
-    fn deref(&self) -> &State {
-        &self.p.post
+impl<'a> StepProof<'a> {
+    fn pc(&self) -> Addr {
+        self.sp.post.inner.state.pc
     }
-}
-
-impl StepProof<'_> {
-    pub fn show_next(&self) {
-        let instr = self.fetch_instr().unwrap();
-        eprintln!("next instr: {}: {:?}", self.p.post.pc, instr);
-    }
-
-    /// Add a new predicate.  This becomes part of the precondition for applying this `Prop::Step`.
-    ///
-    /// The same effect can be achieved by including the predicate in the initial `preds` list when
-    /// creating the `Prop::Step`.
-    pub fn rule_add_pred(&mut self, pred: Pred) {
-        self.p.push_pred(pred);
-    }
-
-    // There is no "weakening" rule for removing a predicate, since we don't know which predicates
-    // were used to establish correctness of various CPU steps.
-
-    pub fn rule_derive_pred(
-        &mut self,
-        f: impl FnOnce(&mut PredProof) -> Result<(), String>,
-    ) -> Result<(), String> {
-        // `PredProof` only pushes at the end of the list, so everything it adds will be considered
-        // a derived predicate.
-        f(&mut PredProof { preds: &mut self.p.all_preds })
-    }
-
-    /// Strengthen the predicates: add `ps` to the base predicates, derive some additional
-    /// predicates `qs` from them, and demote any member of `qs` currently in the base predicates
-    /// to a derived predicate.
-    pub fn rule_strengthen_preds(
-        &mut self,
-        ps: Vec<Pred>,
-        f: impl FnOnce(&mut PredProof) -> Result<(), String>,
-    ) -> Result<(), String> {
-        let num_ps = ps.len();
-        let mut preds = ps;
-        f(&mut PredProof { preds: &mut preds })?;
-
-        // Remove all `qs` from the base predicates.
-        let qs = &preds[num_ps..];
-        // Iterate in reverse order, since `base_to_derived_pred(j)` may modify elements at
-        // positions >= `j`.
-        let mut num_removed = 0;
-        for i in (0 .. self.p.preds().len()).rev() {
-            if qs.contains(&self.p.preds()[i]) {
-                self.p.base_to_derived_pred(i);
-                num_removed += 1;
-            }
-        }
-        if num_removed == 0 {
-            return Err("found no predicates to remove".into());
-        }
-
-        // Add all `ps` to the base predicates.
-        for pred in preds.into_iter().take(num_ps) {
-            if !self.p.preds().contains(&pred) {
-                self.p.push_pred(pred);
-            }
-        }
-
-        Ok(())
-    }
-
     fn fetch_instr(&self) -> Result<Instr, String> {
-        let pc = self.p.post.pc;
-        self.prog.get(&pc).cloned()
+        let pc = self.pc();
+        self.pf.prog.get(&pc).cloned()
             .ok_or_else(|| format!("program executed out of bounds at {}", pc))
     }
 
-    /// Handle a simple instruction that has no preconditions.
-    pub fn rule_step_simple(&mut self) -> Result<(), String> {
+    fn reg_value(&self, reg: Reg) -> Term {
+        self.sp.post.inner.state.reg_value(reg)
+    }
+
+    fn operand_value(&self, op: Operand) -> Term {
+        self.sp.post.inner.state.operand_value(op)
+    }
+
+    fn set_reg(&mut self, reg: Reg, value: Term) {
+        self.sp.post.inner.state.set_reg(reg, value);
+    }
+
+    fn mem_store(&mut self, w: MemWidth, addr: Term, value: Term) -> Result<(), String> {
+        self.sp.post.inner.state.mem.store(w, addr, value, &[])
+    }
+
+    fn mem_load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
+        todo!()
+    }
+
+    fn finish_instr(&mut self) {
+        self.finish_instr_jump(self.pc() + 1);
+    }
+
+    fn finish_instr_jump(&mut self, pc: Addr) {
+        self.sp.post.inner.state.pc = pc;
+
+        let min_cycles = mem::replace(&mut self.sp.min_cycles, Term::const_(0));
+        self.sp.min_cycles = Term::add(min_cycles, Term::const_(1));
+    }
+
+    fn require_premise(&self, premise: &Prop) -> Result<(), String> {
+        // Check `sp.props` first.
+        if self.sp.post.inner.props.iter().any(|p| premise.check_eq(p)) {
+            return Ok(())
+        }
+
+        // Otherwise, look through the various outer scopes.
+        self.pf.require_premise(premise)
+    }
+
+    fn fresh_var(&mut self) -> Term {
+        self.sp.post.vars.fresh()
+    }
+
+    /// Perform one step of execution.  In some cases, this may fail due to a missing precondition.
+    pub fn rule_step(&mut self) -> Result<(), String> {
         let instr = self.fetch_instr()?;
-        let x = self.p.post.reg_value(instr.r1);
-        let y = self.p.post.operand_value(instr.op2);
+        let x = self.reg_value(instr.r1);
+        let y = self.operand_value(instr.op2);
 
         match instr.opcode {
             Opcode::Binary(b) => {
                 let z = Term::binary(b, x, y);
-                self.p.post.set_reg(instr.rd, z);
+                self.set_reg(instr.rd, z);
             },
             Opcode::Not => {
-                self.p.post.set_reg(instr.rd, Term::not(y));
+                self.set_reg(instr.rd, Term::not(y));
             },
             Opcode::Mov => {
-                self.p.post.set_reg(instr.rd, y);
+                self.set_reg(instr.rd, y);
             },
             Opcode::Cmov => {
                 let old = self.reg_value(instr.rd);
                 let z = Term::mux(x, y, old);
-                self.p.post.set_reg(instr.rd, z);
+                self.set_reg(instr.rd, z);
             },
 
-            Opcode::Jmp => Err("can't use step_simple for Jmp")?,
-            Opcode::Cjmp => Err("can't use step_simple for Cjmp")?,
-            Opcode::Cnjmp => Err("can't use step_simple for Cnjmp")?,
+            Opcode::Jmp => {
+                let dest = y.as_const_or_err()
+                    .map_err(|e| format!("when evaluating jmp dest: {e}"))?;
+                eprintln!("run {}: {:?} (simple)", self.pc(), instr);
+                self.finish_instr_jump(dest);
+                return Ok(());
+            },
+            Opcode::Cjmp => return Err("can't use rule_step for Cjmp".into()),
+            Opcode::Cnjmp => return Err("can't use rule_step for Cnjmp".into()),
 
             Opcode::Store(w) |
             Opcode::Poison(w) => {
-                self.p.post.mem.store(w, y, x, &self.p.all_preds)?;
+                self.mem_store(w, y, x)?;
             },
             Opcode::Load(w) => {
-                let z = self.p.post.mem.load(w, y, &self.p.all_preds)?;
-                self.p.post.set_reg(instr.rd, z);
+                let z = self.mem_load(w, y)?;
+                self.set_reg(instr.rd, z);
             },
 
             Opcode::Answer => {
                 // Don't advance the PC.
-                eprintln!("run {}: {:?} (simple)", self.pc, instr);
+                eprintln!("run {}: {:?} (simple)", self.pc(), instr);
+                self.finish_instr_jump(self.pc());
                 return Ok(());
             },
             Opcode::Advise => Err("can't use step_simple for Advise")?,
         }
 
-        eprintln!("run {}: {:?} (simple)", self.pc, instr);
-        self.p.post.pc += 1;
-        self.p.min_cycles += 1;
+        eprintln!("run {}: {:?} (simple)", self.pc(), instr);
+        self.finish_instr();
         Ok(())
     }
 
-    /// Handle a jump instruction with a concrete destination and/or condition.
-    pub fn rule_step_jmp_concrete(&mut self) -> Result<(), String> {
+    pub fn rule_step_jump(&mut self, taken: bool) -> Result<(), String> {
         let instr = self.fetch_instr()?;
-        let old_pc = self.p.post.pc;
-        let x = self.p.post.reg_value(instr.r1);
-        let y = self.p.post.operand_value(instr.op2);
+        let x = self.reg_value(instr.r1);
+        let y = self.operand_value(instr.op2);
 
+        // Check that the precondition for taking / not taking the jump has been established.
         match instr.opcode {
             Opcode::Jmp => {
-                // Always taken; dest must be concrete.
-                self.p.post.pc = y.as_const_or_err()?;
+                if !taken {
+                    return Err("can't fall through an unconditional Jmp".into());
+                }
             },
             Opcode::Cjmp => {
-                // Conditionally taken; the condition must be concrete, and if the branch is taken,
-                // then the dest must be concrete.
-                if x.as_const_or_err()? != 0 {
-                    self.p.post.pc = y.as_const_or_err()
-                        .map_err(|e| format!("when evaluating dest: {e}"))?;
+                if taken {
+                    self.require_premise(&Prop::Nonzero(x))?;
                 } else {
-                    self.p.post.pc += 1;
+                    self.require_premise(&Prop::Nonzero(Term::cmpe(x, 0.into())))?;
                 }
             },
             Opcode::Cnjmp => {
-                if x.as_const_or_err()? == 0 {
-                    self.p.post.pc = y.as_const_or_err()
-                        .map_err(|e| format!("when evaluating dest: {e}"))?;
+                if taken {
+                    self.require_premise(&Prop::Nonzero(Term::cmpe(x, 0.into())))?;
                 } else {
-                    self.p.post.pc += 1;
+                    self.require_premise(&Prop::Nonzero(x))?;
                 }
             },
-            op => Err(format!("can't use step_jmp_concrete for {:?}", op))?,
+
+            op => return Err(format!("can't use rule_step_jump for {:?}", op)),
         }
 
-        eprintln!("run {}: {:?} (jmp_concrete)", old_pc, instr);
-        self.p.min_cycles += 1;
+        if taken {
+            let dest = y.as_const_or_err()
+                .map_err(|e| format!("when evaluating jmp dest: {e}"))?;
+            eprintln!("run {}: {:?} (jump, taken)", self.pc(), instr);
+            self.finish_instr_jump(dest);
+        } else {
+            eprintln!("run {}: {:?} (jump, not taken)", self.pc(), instr);
+            self.finish_instr();
+        }
         Ok(())
     }
 
     /// Handle a load instruction by introducing a fresh variable for the result.  This gives no
     /// information about the value that was actually loaded.
-    pub fn rule_step_mem_load_fresh(&mut self) -> Result<(), String> {
+    pub fn rule_step_load_fresh(&mut self) -> Result<(), String> {
         let instr = self.fetch_instr()?;
 
         match instr.opcode {
             Opcode::Load(_) => {
-                let z = self.p.vars.fresh();
-                self.p.post.set_reg(instr.rd, z);
+                let z = self.fresh_var();
+                self.set_reg(instr.rd, z);
             },
 
-            op => Err(format!("can't use step_mem_load_fresh for {:?}", op))?,
+            op => Err(format!("can't use rule_step_load_fresh for {:?}", op))?,
         }
 
-        eprintln!("run {}: {:?} (mem_load_fresh)", self.pc, instr);
-        self.p.post.pc += 1;
-        self.p.min_cycles += 1;
-        Ok(())
-    }
-
-    pub fn tactic_step_concrete(&mut self) -> Result<(), String> {
-        let instr = self.fetch_instr()?;
-        match instr.opcode {
-            Opcode::Binary(_) |
-            Opcode::Not |
-            Opcode::Mov |
-            Opcode::Cmov |
-            Opcode::Store(_) |
-            Opcode::Poison(_) |
-            Opcode::Load(_) |
-            Opcode::Answer => self.rule_step_simple(),
-
-            Opcode::Jmp |
-            Opcode::Cjmp |
-            Opcode::Cnjmp => self.rule_step_jmp_concrete(),
-
-            op => Err(format!("can't use step_concrete for {:?}", op)),
-        }
-    }
-
-    /// Take as many steps as possible with `tactic_step_concrete`.  Stops running when
-    /// `tactic_step_concrete` returns an error.  The error from `tactic_step_concrete` is
-    /// discarded; this method only returns `Err` if `self.pc` goes outside of `prog`.
-    pub fn tactic_run_concrete(&mut self) -> Result<(), String> {
-        loop {
-            let instr = self.fetch_instr()?;
-            if instr.opcode == Opcode::Answer {
-                break;
-            }
-            let r = self.tactic_step_concrete();
-            if r.is_err() {
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn tactic_run_concrete_until(&mut self, pc: Addr) -> Result<(), String> {
-        while self.p.post.pc != pc {
-            let instr = self.fetch_instr()?;
-            if instr.opcode == Opcode::Answer {
-                return Err(format!("encountered Answer at {} before reaching pc = {}",
-                    self.p.post.pc, pc));
-            }
-            self.tactic_step_concrete()?;
-        }
-        Ok(())
-    }
-
-    pub fn rule_rewrite_reg(&mut self, reg: Reg, t: Term) -> Result<(), String> {
-        let reg_val = self.p.post.reg_value(reg);
-        let need_pred = Pred::Eq(reg_val.clone(), t.clone());
-        if !self.p.all_preds.contains(&need_pred) {
-            return Err(format!("missing precondition: {} == {}", reg_val, t));
-        }
-        self.p.post.set_reg(reg, t);
+        eprintln!("run {}: {:?} (load_fresh)", self.pc(), instr);
+        self.finish_instr();
         Ok(())
     }
 
     /// Replace the value of `reg` with a fresh symbolic variable.
     pub fn rule_forget_reg(&mut self, reg: Reg) {
-        self.p.post.set_reg(reg, self.p.vars.fresh());
+        let z = self.fresh_var();
+        self.set_reg(reg, z);
     }
-
-    pub fn tactic_step_jmp_taken(&mut self) -> Result<(), String> {
-        let instr = self.fetch_instr()?;
-        match instr.opcode {
-            Opcode::Cjmp => {
-                self.rule_rewrite_reg(instr.r1, Term::const_(1))?;
-            },
-            Opcode::Cnjmp => {
-                self.rule_rewrite_reg(instr.r1, Term::const_(0))?;
-            },
-            _ => {},
-        }
-        self.rule_step_jmp_concrete()
-    }
-
-    pub fn tactic_step_jmp_not_taken(&mut self) -> Result<(), String> {
-        let instr = self.fetch_instr()?;
-        match instr.opcode {
-            Opcode::Cjmp => {
-                self.rule_rewrite_reg(instr.r1, Term::const_(0))?;
-            },
-            Opcode::Cnjmp => {
-                self.rule_rewrite_reg(instr.r1, Term::const_(1))?;
-            },
-            _ => {},
-        }
-        self.rule_step_jmp_concrete()
-    }
-}
-
-
-/// Helper for proving new predicates given some set of existing ones.
-///
-/// Note that this only pushes at the end of the list of predicates; it never modifies existing
-/// predicates or inserts in the middle of the list.
-pub struct PredProof<'a> {
-    preds: &'a mut Vec<Pred>,
-}
-
-impl PredProof<'_> {
-    pub fn admit(&mut self, pred: Pred) {
-        eprintln!("ADMITTED: {}", pred);
-        self.preds.push(pred);
-    }
-
-    pub fn show(&self) {
-        for (i, p) in self.preds.iter().enumerate() {
-            eprintln!("{}:  {}", i, p);
-        }
-    }
-
-    fn require_premise(&self, premise: &Pred) -> Result<(), String> {
-        if !self.preds.contains(&premise) {
-            return Err(format!("missing premise: {}", premise));
-        }
-        Ok(())
-    }
-
-    /// Introduce `Nonzero(x)`.  Panics if `x` is zero.
-    pub fn rule_nonzero_const(&mut self, x: Word) {
-        assert!(x != 0);
-        self.preds.push(Pred::Nonzero(Term::const_(x)));
-    }
-
-    /// `x >u y` implies `x != y`.
-    pub fn rule_gt_ne_unsigned(&mut self, x: Term, y: Term) -> Result<(), String> {
-        self.require_premise(&Pred::Nonzero(Term::cmpa(x.clone(), y.clone())))?;
-        self.preds.push(Pred::Eq(Term::cmpe(x.clone(), y.clone()), 0.into()));
-        Ok(())
-    }
-
-    /// `x >u y` and `y >=u z` implies `x >u z`.
-    pub fn rule_gt_ge_unsigned(&mut self, x: Term, y: Term, z: Term) -> Result<(), String> {
-        self.require_premise(&Pred::Nonzero(Term::cmpa(x.clone(), y.clone())))?;
-        self.require_premise(&Pred::Nonzero(Term::cmpae(y.clone(), z.clone())))?;
-        self.preds.push(Pred::Nonzero(Term::cmpa(x, z)));
-        Ok(())
-    }
-
-    /// `x >u y` and `0 <=u z <=u y` implies `x - z >u y - z`.
-    pub fn rule_gt_sub_unsigned(&mut self, x: Term, y: Term, z: Term) -> Result<(), String> {
-        self.require_premise(&Pred::Nonzero(Term::cmpa(x.clone(), y.clone())))?;
-        self.require_premise(&Pred::Nonzero(Term::cmpae(z.clone(), 0.into())))?;
-        self.require_premise(&Pred::Nonzero(Term::cmpae(y.clone(), z.clone())))?;
-        self.preds.push(Pred::Nonzero(Term::cmpa(
-            Term::sub(x, z.clone()),
-            Term::sub(y, z),
-        )));
-        Ok(())
-    }
-
-    // TODO: add more derivation rules
 }
