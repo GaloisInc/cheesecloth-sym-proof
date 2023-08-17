@@ -5,6 +5,7 @@ use std::rc::Rc;
 use crate::{Word, WORD_BYTES, Addr, BinOp};
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand};
 use crate::logic::{Term, VarId, Subst, Prop};
+use crate::logic::fold::{Fold, Folder};
 
 
 pub trait Memory {
@@ -374,4 +375,18 @@ impl State {
         Ok(())
     }
     */
+}
+
+impl Fold for State {
+    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+        let State { pc, ref regs, ref mem } = *self;
+        State {
+            pc,
+            regs: regs.fold_with(f),
+            mem: {
+                eprintln!("ADMITTED: Fold for MemState ({})", std::any::type_name::<F>());
+                mem.clone()
+            },
+        }
+    }
 }

@@ -7,6 +7,10 @@ use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand};
 use crate::symbolic;
 
 
+pub mod fold;
+pub mod shift;
+
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct VarId(u32);
 
