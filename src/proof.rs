@@ -7,7 +7,7 @@ use crate::logic::{
     Term, VarId, VarCounter, Binder, Prop, StepProp, ReachableProp, StatePred, Subst, SubstTable,
     IdentitySubsts, EqAlpha,
 };
-use crate::logic::print::{Print, Printer, DisplayWithPrinter, debug_print};
+use crate::logic::print::{Print, Printer, DisplayWithPrinter, debug_print, PrintBinder};
 use crate::logic::shift::ShiftExt;
 use crate::logic::subst::SubstExt;
 use crate::logic::wf::WfExt;
@@ -382,20 +382,18 @@ impl<'a> Proof<'a> {
         debug_assert_eq!(succ_binder.vars.len(), expect_no_overflow.vars.len());
         if !EqAlpha::compare_props(&no_overflow.inner, &expect_no_overflow.inner) {
             return Err(format!("expected Hsucc first premise to be ({}), but got ({})",
-                self.print(&expect_no_overflow), self.print(&no_overflow)));
+                self.print(&PrintBinder::forall(&expect_no_overflow)),
+                self.print(&PrintBinder::forall(&no_overflow))));
         }
 
         let expect_conclusion = Binder::new(|vars| {
-            eprintln!("old pred = {}", debug_print(&predicate));
             let predicate = predicate.map(|prop| prop.shift_free(1, 1));
-            eprintln!("new pred = {}", debug_print(&predicate));
-            let x = predicate.subst(&[Term::add(vars.fresh(), 1.into())]);
-            eprintln!("after subst = {}", debug_print(&x));
-            x
+            predicate.subst(&[Term::add(vars.fresh(), 1.into())])
         });
         if !EqAlpha::compare_props(&conclusion.inner, &expect_conclusion.inner) {
             return Err(format!("expected Hsucc conclusion to be ({}), but got ({})",
-                self.print(&expect_conclusion), self.print(&conclusion)));
+                self.print(&PrintBinder::forall(&expect_conclusion)),
+                self.print(&PrintBinder::forall(&conclusion))));
         }
 
         // We have now extracted `P` as `predicate`.
@@ -405,7 +403,7 @@ impl<'a> Proof<'a> {
         let expect_zero = predicate.subst_ref(&[0.into()]);
         if !EqAlpha::compare_props(&zero_prop, &expect_zero) {
             return Err(format!("expected Hzero to be ({}), but got ({})",
-                self.print(&expect_zero), self.print(&zero_prop)));
+                self.print(&expect_zero), self.print(zero_prop)));
         }
 
         // Add `forall n, P n`.

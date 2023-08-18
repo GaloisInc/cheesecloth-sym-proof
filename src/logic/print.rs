@@ -157,7 +157,8 @@ impl Print for Prop {
     }
 }
 
-enum BinderMode {
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum BinderMode {
     Forall,
     Exists,
 }
@@ -195,58 +196,42 @@ fn print_binder(
     }
 }
 
-/// This is currently for debug printing only.  It assumes all binders are `forall` binders.
-impl<T: Print> Print for Binder<T> {
-    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
-        print_binder(p, f, BinderMode::Forall, &self.vars)?;
-        p.enter_binder(|p| {
-            self.inner.print(p, f)
-        })
-    }
-}
-
 impl Print for StepProp {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         let StepProp { ref pre, ref post, ref min_cycles } = *self;
-        f.write_str("{")?;
-        print_binder_state_pred(p, f, pre)?;
-        write!(f, "}} ->({}) {{", p.display(min_cycles))?;
-        print_binder_state_pred(p, f, post)?;
-        f.write_str("}")?;
-        Ok(())
+        write!(
+            f, "{{{}}} ->({}) {{{}}}",
+            p.display(&PrintBinder(BinderMode::Exists, pre)),
+            p.display(min_cycles),
+            p.display(&PrintBinder(BinderMode::Exists, post)),
+        )
     }
 }
 
 impl Print for ReachableProp {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         let ReachableProp { ref pred, ref min_cycles } = *self;
-        write!(f, "{{init}} ->({}) {{", p.display(min_cycles))?;
-        print_binder_state_pred(p, f, pred)?;
-        f.write_str("}")?;
-        Ok(())
+        write!(
+            f, "{{init}} ->({}) {{{}}}",
+            p.display(min_cycles),
+            p.display(&PrintBinder(BinderMode::Exists, pred)),
+        )
     }
 }
 
-fn print_binder_state_pred(
-    p: &Printer,
-    f: &mut fmt::Formatter,
-    bsp: &Binder<StatePred>,
-) -> fmt::Result {
-    print_binder(p, f, BinderMode::Exists, &bsp.vars)?;
-
-    p.enter_binder(|p| {
-        let sp = &bsp.inner;
-        write!(f, "pc = {}", sp.state.pc)?;
+impl Print for StatePred {
+    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "pc = {}", self.state.pc)?;
 
         let mut vars_mentioned_in_props = HashSet::new();
-        for p in &sp.props {
+        for p in &self.props {
             p.for_each_var(&mut |v| -> Option<()> {
                 vars_mentioned_in_props.insert(v);
                 None
             });
         }
 
-        for (i, t) in sp.state.regs.iter().enumerate() {
+        for (i, t) in self.state.regs.iter().enumerate() {
             if let Some(v) = t.as_var() {
                 if v.scope() == 0 && !vars_mentioned_in_props.contains(&v) {
                     // `v` is an unconstrained existential, so register `i` is unconstrained.
@@ -256,7 +241,7 @@ fn print_binder_state_pred(
             write!(f, " /\\ r{} = {}", i, p.display(t))?;
         }
 
-        for prop in &sp.props {
+        for prop in &self.props {
             write!(f, " /\\ {}", p.display(prop))?;
         }
 
@@ -264,7 +249,29 @@ fn print_binder_state_pred(
         write!(f, " /\\ MEM")?;
 
         Ok(())
-    })
+    }
+}
+
+pub struct PrintBinder<'a, T>(pub BinderMode, pub &'a Binder<T>);
+
+impl<'a, T> PrintBinder<'a, T> {
+    pub fn forall(b: &'a Binder<T>) -> PrintBinder<'a, T> {
+        PrintBinder(BinderMode::Forall, b)
+    }
+
+    pub fn exists(b: &'a Binder<T>) -> PrintBinder<'a, T> {
+        PrintBinder(BinderMode::Exists, b)
+    }
+}
+
+impl<'a, T: Print> Print for PrintBinder<'a, T> {
+    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+        let PrintBinder(mode, binder) = *self;
+        print_binder(p, f, mode, &binder.vars)?;
+        p.enter_binder(|p| {
+            binder.inner.print(p, f)
+        })
+    }
 }
 
 
