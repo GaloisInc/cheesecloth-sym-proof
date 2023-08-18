@@ -43,8 +43,11 @@ pub trait ShiftExt: Sized {
     fn shift_free(&self, free_scope: u32, amount: u32) -> Self;
 }
 
-impl<T: Fold> ShiftExt for T {
+impl<T: Fold + Clone> ShiftExt for T {
     fn shift_free(&self, free_scope: u32, amount: u32) -> Self {
+        if amount == 0 {
+            return self.clone();
+        }
         self.fold_with(&mut ShiftFolder::new(free_scope, amount))
     }
 }

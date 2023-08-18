@@ -6,6 +6,9 @@ use crate::logic::{
     Term, VarId, VarCounter, Binder, Prop, StepProp, ReachableProp, StatePred, Subst, SubstTable,
     IdentitySubsts, EqAlpha,
 };
+use crate::logic::print::{Print, Printer, DisplayWithPrinter, debug_print};
+use crate::logic::shift::ShiftExt;
+use crate::logic::subst::SubstExt;
 use crate::symbolic::{self, Memory};
 use crate::micro_ram::{self, Instr, Opcode, Reg, Operand, MemWidth};
 
@@ -13,13 +16,39 @@ use crate::micro_ram::{self, Instr, Opcode, Reg, Operand, MemWidth};
 
 pub struct Proof<'a> {
     prog: &'a HashMap<u64, Instr>,
-    /// Enclosing scopes.  `scopes[0]` is the innermost and `scopes.last()` is the outermost.  For
-    /// each one, we have a `u32` scope ID (as returned by `VarId::scope`) and a list of
-    /// propositions that are known to hold over the variables of that scope and outer scopes.
-    scopes: Box<[(u32, &'a mut Vec<Prop>)]>,
+    /// Enclosing scopes.  `scopes[0]` is the outermost and `scopes.last()` is the innermost.  For
+    /// each one, we have a list of propositions that are known to hold over the variables of that
+    /// scope and outer scopes.
+    outer_scopes: Box<[&'a [Prop]]>,
+
+    props: &'a mut Vec<Prop>,
 }
 
 impl<'a> Proof<'a> {
+    pub fn print<'b, P: Print>(&self, p: &'b P) -> DisplayWithPrinter<'b, P> {
+        self.printer().display(p)
+    }
+
+    pub fn print_adj<'b, P: Print>(&self, adj_depth: u32, p: &'b P) -> DisplayWithPrinter<'b, P> {
+        self.printer_adj(adj_depth).display(p)
+    }
+
+    pub fn print_depth<'b, P: Print>(&self, depth: u32, p: &'b P) -> DisplayWithPrinter<'b, P> {
+        self.printer_depth(depth).display(p)
+    }
+
+    pub fn printer(&self) -> Printer {
+        self.printer_adj(0)
+    }
+
+    pub fn printer_adj(&self, adj_depth: u32) -> Printer {
+        self.printer_depth(self.outer_scopes.len() as u32 + adj_depth)
+    }
+
+    pub fn printer_depth(&self, depth: u32) -> Printer {
+        Printer::new(depth)
+    }
+
     pub fn prove(
         prog: &HashMap<u64, Instr>,
         f: impl FnOnce(&mut Proof) -> Result<(), String>,
@@ -27,7 +56,8 @@ impl<'a> Proof<'a> {
         let mut props = Vec::new();
         f(&mut Proof {
             prog,
-            scopes: Box::new([(0, &mut props)]),
+            outer_scopes: Box::new([]),
+            props: &mut props,
         })?;
         Ok(props)
     }
@@ -36,145 +66,179 @@ impl<'a> Proof<'a> {
     /// `Prop`s that are implied by the original premises.
     fn enter<R>(
         &mut self,
-        scope: u32,
         props: &mut Vec<Prop>,
         f: impl FnOnce(&mut Proof) -> Result<R, String>,
     ) -> Result<R, String> {
-        self.enter_owned(scope, props, |mut pf| f(&mut pf))
+        self.enter_owned(props, |mut pf| f(&mut pf))
     }
 
     fn enter_owned<R>(
         &mut self,
-        scope: u32,
         props: &mut Vec<Prop>,
         f: impl FnOnce(Proof) -> Result<R, String>,
     ) -> Result<R, String> {
-        let mut scopes = Vec::with_capacity(self.scopes.len() + 1);
-        scopes.push((scope, props));
-        for &mut (s, ref mut ps) in self.scopes.iter_mut() {
-            scopes.push((s, ps));
+        let mut outer_scopes = Vec::<&[Prop]>::with_capacity(self.outer_scopes.len() + 1);
+        for ps in self.outer_scopes.iter() {
+            outer_scopes.push(ps);
         }
-        let scopes = scopes.into_boxed_slice();
+        outer_scopes.push(self.props);
+        let outer_scopes = outer_scopes.into_boxed_slice();
 
-        f(Proof { prog: self.prog, scopes })
+        f(Proof {
+            prog: self.prog,
+            outer_scopes,
+            props,
+        })
     }
 
     fn reenter_owned<R>(
         &mut self,
         f: impl FnOnce(Proof) -> Result<R, String>,
     ) -> Result<R, String> {
-        let mut scopes = Vec::with_capacity(self.scopes.len());
-        for &mut (s, ref mut ps) in self.scopes.iter_mut() {
-            scopes.push((s, &mut **ps));
+        let mut outer_scopes = Vec::<&[Prop]>::with_capacity(self.outer_scopes.len());
+        for ps in self.outer_scopes.iter() {
+            outer_scopes.push(ps);
         }
-        let scopes = scopes.into_boxed_slice();
+        let outer_scopes = outer_scopes.into_boxed_slice();
 
-        f(Proof { prog: self.prog, scopes })
+        f(Proof {
+            prog: self.prog,
+            outer_scopes,
+            props: self.props,
+        })
     }
 
     pub fn show_context(&self) {
-        for (i, &(_, ref ps)) in self.scopes.iter().rev().enumerate() {
+        for (i, ps) in self.outer_scopes.iter().rev().enumerate() {
             for (j, p) in ps.iter().enumerate() {
-                eprintln!("{}.{}: {}", i, j, p);
+                eprintln!("{}.{}: {}", i, j, self.print_depth(i as u32, p));
             }
+        }
+
+        let i = self.outer_scopes.len();
+        for (j, p) in self.props.iter().enumerate() {
+            eprintln!("{}.{}: {}", i, j, self.print(p));
         }
     }
 
-    fn get_prop(&self, depth: usize, index: usize) -> &Prop {
-        let scope = self.scopes.len() - 1 - depth;
-        &self.scopes[scope].1[index]
+    fn add_prop(&mut self, prop: Prop) -> usize {
+        let depth = self.outer_scopes.len();
+        let i = self.props.len();
+        println!("proved {}.{}: {}", depth, i, self.print(&prop));
+        self.props.push(prop);
+        i
     }
 
-    fn add_prop(&mut self, prop: Prop) -> usize {
-        let depth = self.scopes.len();
-        let props = &mut self.scopes[0].1;
-        let i = props.len();
-        println!("proved {}.{}: {}", depth - 1, i, prop);
-        props.push(prop);
-        i
+    /// Copy a `Prop` from an outer scope into the current scope.  This shifts the free variables
+    /// to make it valid in the current scope.
+    pub fn rule_shift(&mut self, depth: usize, index: usize) -> usize {
+        let amount = (self.outer_scopes.len() - depth) as u32;
+        eprintln!("rule_shift: shift by {amount}, prop = {}",
+            self.print_depth(depth as u32, &self.outer_scopes[depth][index]));
+        let prop = self.outer_scopes[depth][index].shift_by(amount);
+        self.add_prop(prop)
     }
 
     /// Duplicate a `Prop` in scope.  This can only be applied to the innermost scope.
     pub fn rule_clone(&mut self, index: usize) -> usize {
-        let prop = self.scopes[0].1[index].clone();
+        let prop = self.props[index].clone();
         self.add_prop(prop)
     }
 
     pub fn admit(&mut self, prop: Prop) -> usize {
-        println!("ADMITTED: {}", prop);
+        println!("ADMITTED: {}", self.print(&prop));
         self.add_prop(prop)
     }
 
     /// Ensure that `premise` appears somewhere in the current scope.
     fn require_premise(&self, premise: &Prop) -> Result<(), String> {
-        for s in self.scopes.iter() {
-            for p in s.1.iter() {
-                if premise.check_eq(p) {
+        for (i, ps) in self.outer_scopes.iter().enumerate() {
+            let shift_amount = (self.outer_scopes.len() - i) as u32;
+            for p in ps.iter() {
+                if premise.check_eq(&p.shift_by(shift_amount)) {
                     return Ok(())
                 }
             }
         }
+        for p in self.props.iter() {
+            if premise.check_eq(p) {
+                return Ok(())
+            }
+        }
 
-        Err(format!("missing premise: {}", premise))
+        Err(format!("missing premise: {}", self.print(premise)))
+    }
+
+    fn require_premise_shifted(&self, shift: u32, premise: &Prop) -> Result<(), String> {
+        for (i, ps) in self.outer_scopes.iter().enumerate() {
+            let shift_amount = shift + (self.outer_scopes.len() - i) as u32;
+            for p in ps.iter() {
+                if premise.check_eq(&p.shift_by(shift_amount)) {
+                    return Ok(())
+                }
+            }
+        }
+        for p in self.props.iter() {
+            if premise.check_eq(&p.shift_by(shift)) {
+                return Ok(())
+            }
+        }
+
+        Err(format!("missing premise: {}", self.print(premise)))
     }
 
     /// Apply a `Prop::Forall` to arguments.  `subst` provides `Term`s to be substituted for the
     /// bound variables.  After substitution, the premises of the `Forall` are required to hold,
     /// and the conclusion is introduced into the current scope.
-    // FIXME (unsound): restrict what subst can be performed here
     pub fn rule_apply(
         &mut self,
-        depth: usize,
         index: usize,
-        subst: &mut impl Subst,
+        args: &[Term],
     ) -> Result<usize, String> {
-        let prop = self.get_prop(depth, index);
+        let prop = &self.props[index];
         let binder = match *prop {
             Prop::Forall(ref b) => b,
-            _ => return Err(format!("rule_apply: expected forall, but got {}", prop)),
+            _ => return Err(format!("rule_apply: expected forall, but got {}", self.print(prop))),
         };
 
-        let (ref premises, ref conclusion) = binder.inner;
-        for premise in premises {
-            self.require_premise(&premise.subst(subst))?;
+        let premises = binder.map(|&(ref ps, _)| ps);
+        let conclusion = binder.map(|&(_, ref q)| &**q);
+        for premise in premises.iter() {
+            self.require_premise(&premise.subst_ref(args))?;
         }
 
-        Ok(self.add_prop(conclusion.subst(subst)))
+        Ok(self.add_prop(conclusion.subst_ref(args)))
     }
 
     pub fn tactic_apply0(
         &mut self,
-        depth: usize,
         index: usize,
     ) -> Result<usize, String> {
-        self.rule_apply(depth, index, &mut IdentitySubsts::new())
-    }
-
-    fn next_scope(&self) -> u32 {
-        let scope = self.scopes.len() as u32;
-        assert!(self.scopes.iter().all(|s| s.0 != scope));
-        scope
+        self.rule_apply(index, &[])
     }
 
     /// Prove a theorem of the form `forall xs, Ps(xs) => Q(xs)`.  `mk_premises` sets up `xs` and
     /// `Ps`, and it can return some extra data such as `VarId`s to be passed to `prove`.  `prove`
     /// derives some conclusion from the premises.  After running `prove`, the final `Prop` it
     /// proved becomes the conclusion of the `forall`.
+    ///
+    /// Note that the closures run under a binder, so terms from outside should be `shift`-ed
+    /// before use.
     pub fn rule_forall_intro<T>(
         &mut self,
         mk_premises: impl FnOnce(&mut VarCounter) -> (Vec<Prop>, T),
         prove: impl FnOnce(&mut Proof, T) -> Result<(), String>,
     ) -> Result<usize, String> {
-        let scope = self.next_scope();
-
-        let inner_depth = self.scopes.len();
-        let b = Binder::try_new(scope, |vars| {
+        let b = Binder::try_new(|vars| {
+            // TODO: what happens if the closure fails to shift and introduces an out-of-range
+            // variable for this binder?  failure at application time?
             let (mut props, extra) = mk_premises(vars);
             let premises = props.clone();
+            let inner_depth = self.outer_scopes.len() + 1;
             for (i, p) in premises.iter().enumerate() {
-                eprintln!("introduced {}.{}: {}", inner_depth, i, p);
+                eprintln!("introduced {}.{}: {}", inner_depth, i, self.print_adj(1, p));
             }
-            self.enter(scope, &mut props, |pf| prove(pf, extra))?;
+            self.enter(&mut props, |pf| prove(pf, extra))?;
             let conclusion = props.pop().unwrap();
             Ok((premises, Box::new(conclusion)))
         })?;
@@ -187,18 +251,20 @@ impl<'a> Proof<'a> {
         prove: impl FnOnce(&mut Proof) -> Result<(), String>,
     ) -> Result<usize, String> {
         self.rule_forall_intro(
-            |_| (premises, ()),
+            |_| (premises.shift(), ()),
             |pf, ()| prove(pf),
         )
     }
 
     /// Prove a trivial `Prop::Step` of the form `{P} ->0 {P}`.
+    ///
+    /// Note that the closure runs under a binder, so terms from outside should be `shift`-ed
+    /// before use.
     pub fn rule_step_zero(
         &mut self,
         f: impl FnOnce(&mut VarCounter) -> StatePred,
     ) -> usize {
-        let scope = self.next_scope();
-        let pred = Binder::new(scope, f);
+        let pred = Binder::new(f);
         let prop = Prop::Step(StepProp {
             pre: pred.clone(),
             post: pred,
@@ -215,30 +281,32 @@ impl<'a> Proof<'a> {
         f: impl FnOnce(&mut StepProof) -> Result<R, String>,
     ) -> Result<R, String> {
         let dummy_prop = Prop::Nonzero(1.into());
-        let mut sp = match mem::replace(&mut self.scopes[0].1[index], dummy_prop) {
+        let mut sp = match mem::replace(&mut self.props[index], dummy_prop) {
             Prop::Step(sp) => sp,
             prop => {
-                let msg = format!("rule_step_extend expected step, but got {}", prop);
-                self.scopes[0].1[index] = prop;
+                let msg = format!("rule_step_extend expected step, but got {}", self.print(&prop));
+                self.props[index] = prop;
                 return Err(msg);
             },
         };
         let r = self.reenter_owned(|pf| {
             f(&mut StepProof { pf, sp: &mut sp })
         });
-        self.scopes[0].1[index] = Prop::Step(sp);
+        self.props[index] = Prop::Step(sp);
         r
     }
 
     /// Admit as an axiom that the program can execute at least `min_cycles` and end in the given
     /// state.
+    ///
+    /// Note that the closure runs under a binder, so terms from outside should be `shift`-ed
+    /// before use.
     pub fn admit_reachable(
         &mut self,
         min_cycles: Term,
         f: impl FnOnce(&mut VarCounter) -> StatePred,
     ) -> usize {
-        let scope = self.next_scope();
-        let pred = Binder::new(scope, f);
+        let pred = Binder::new(f);
         let prop = Prop::Reachable(ReachableProp { pred, min_cycles });
         self.add_prop(prop)
     }
@@ -257,73 +325,69 @@ impl<'a> Proof<'a> {
     /// possible values of `n`.
     pub fn rule_induction(
         &mut self,
-        zero_depth: usize,
         zero_index: usize,
-        succ_depth: usize,
         succ_index: usize,
     ) -> Result<usize, String> {
         // Check that `Hsucc` has the form `forall n, P n -> P (n + 1)`.
-        let succ_prop = self.get_prop(succ_depth, succ_index);
-        let succ_b = match succ_prop {
+        let succ_prop = &self.props[succ_index];
+        let succ_binder = match succ_prop {
             &Prop::Forall(ref b) => b,
-            ref p => return Err(format!("expected Hsucc to be a forall, but got {}", p)),
+            ref p => return Err(format!(
+                "expected Hsucc to be a forall, but got {}", self.print(p))),
         };
 
-        let vars = &succ_b.vars;
+        let vars = &succ_binder.vars;
         if vars.len() != 1 {
             return Err(format!(
-                "expected Hsucc to bind exactly one variable, but got {}", succ_prop));
+                "expected Hsucc to bind exactly one variable, but got {}", self.print(succ_prop)));
         }
-        let scope = vars.scope();
-        let var = VarId::new(scope, 0);
 
-        let (ref premises, ref conclusion) = succ_b.inner;
-        if premises.len() != 2 {
+        let premises = succ_binder.map(|&(ref ps, _)| ps);
+        let conclusion = succ_binder.map(|&(_, ref q)| &**q);
+        if premises.inner.len() != 2 {
             return Err(format!(
-                "expected Hsucc to have exactly two premises, but got {}", succ_prop));
+                "expected Hsucc to have exactly two premises, but got {}", self.print(succ_prop)));
         }
-        let no_overflow = &premises[0];
-        let predicate = &premises[1];
+        let no_overflow = premises.map(|ps| &ps[0]);
+        let predicate = premises.map(|ps| &ps[1]);
 
-        let expect_no_overflow = Prop::Nonzero(
-            Term::cmpa(Term::add(Term::var_unchecked(var), 1.into()), 0.into()));
-        if !EqAlpha::compare_props(&no_overflow, &expect_no_overflow) {
+        let expect_no_overflow = Binder::new(|vars| {
+            Prop::Nonzero(Term::cmpa(Term::add(vars.fresh(), 1.into()), 0.into()))
+        });
+        debug_assert_eq!(succ_binder.vars.len(), expect_no_overflow.vars.len());
+        if !EqAlpha::compare_props(&no_overflow.inner, &expect_no_overflow.inner) {
             return Err(format!("expected Hsucc first premise to be ({}), but got ({})",
-                expect_no_overflow, no_overflow));
+                self.print(&expect_no_overflow), self.print(&no_overflow)));
         }
 
-        let expect_conclusion = predicate.subst(&mut SubstTable::new(|v| {
-            if v == var {
-                Term::add(Term::var_unchecked(v), 1.into())
-            } else {
-                Term::var_unchecked(v)
-            }
-        }));
-        if !EqAlpha::compare_props(&conclusion, &expect_conclusion) {
+        let expect_conclusion = Binder::new(|vars| {
+            eprintln!("old pred = {}", debug_print(&predicate));
+            let predicate = predicate.map(|prop| prop.shift_free(1, 1));
+            eprintln!("new pred = {}", debug_print(&predicate));
+            let x = predicate.subst(&[Term::add(vars.fresh(), 1.into())]);
+            eprintln!("after subst = {}", debug_print(&x));
+            x
+        });
+        if !EqAlpha::compare_props(&conclusion.inner, &expect_conclusion.inner) {
             return Err(format!("expected Hsucc conclusion to be ({}), but got ({})",
-                expect_conclusion, conclusion));
+                self.print(&expect_conclusion), self.print(&conclusion)));
         }
 
         // We have now extracted `P` as `predicate`.
 
         // Check that `Hzero` has the form `P 0`.
-        let zero_prop = self.get_prop(zero_depth, zero_index);
-        let expect_zero = predicate.subst(&mut SubstTable::new(|v| {
-            if v == var {
-                0.into()
-            } else {
-                Term::var_unchecked(v)
-            }
-        }));
+        let zero_prop = &self.props[zero_index];
+        let expect_zero = predicate.subst_ref(&[0.into()]);
         if !EqAlpha::compare_props(&zero_prop, &expect_zero) {
             return Err(format!("expected Hzero to be ({}), but got ({})",
-                expect_zero, zero_prop));
+                self.print(&expect_zero), self.print(&zero_prop)));
         }
 
         // Add `forall n, P n`.
-        Ok(self.add_prop(Prop::Forall(Binder::new(scope, |vars| {
-            assert_eq!(vars.fresh_var(), var);
-            (Vec::new(), Box::new(predicate.clone()))
+        Ok(self.add_prop(Prop::Forall(Binder::new(|vars| {
+            // We don't shift `predicate` because we already skipped a binder to get it.
+            assert_eq!(vars.fresh_var(), VarId::new(0, 0));
+            (Vec::new(), Box::new(predicate.inner.clone()))
         }))))
     }
 
@@ -388,7 +452,7 @@ impl<'a> StepProof<'a> {
         }
 
         // Otherwise, look through the various outer scopes.
-        self.pf.require_premise(premise)
+        self.pf.require_premise_shifted(1, premise)
     }
 
     fn fresh_var(&mut self) -> Term {

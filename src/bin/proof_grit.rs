@@ -16,6 +16,7 @@ use env_logger;
 use log::trace;
 use sym_proof::Word;
 use sym_proof::logic::{Term, Prop, Binder, VarCounter, StepProp, StatePred, VarId, SubstTable};
+use sym_proof::logic::shift::ShiftExt;
 use sym_proof::micro_ram::NUM_REGS;
 use sym_proof::micro_ram::import;
 use sym_proof::proof::Proof;
@@ -59,12 +60,14 @@ fn run(path: &str) -> Result<(), String> {
 
     let lemmas = Proof::prove(&prog, |pf| {
         // Prove a single iteration
+        eprintln!("\nprove l_iter");
         let l_iter = pf.rule_forall_intro(
             |vars| {
                 let n = vars.fresh();
                 (vec![Prop::Nonzero(Term::cmpa(n.clone(), 0.into()))], n)
             },
             |pf, n| {
+                pf.show_context();
                 // `n != 0` is needed to show that the jump is taken.
                 pf.rule_gt_ne_unsigned(n.clone(), 0.into())?;
                 let l = pf.rule_step_zero(|vars| {
@@ -74,7 +77,7 @@ fn run(path: &str) -> Result<(), String> {
                             regs: array::from_fn(|r| {
                                 let v = vars.fresh();
                                 match r {
-                                    12 => n.clone(),
+                                    12 => n.shift(),
                                     _ => v,
                                 }
                             }),
@@ -119,7 +122,7 @@ fn run(path: &str) -> Result<(), String> {
             }
         };
         let p_step = |n: Term| {
-            let pre = Binder::new(5, |vars| p_pre_state(vars, n.clone()));
+            let pre = Binder::new(|vars| p_pre_state(vars, n.shift()));
             let mut post = pre.clone();
             post.inner.state.regs[12] = Term::const_(0);
             Prop::Step(StepProp {
@@ -129,15 +132,16 @@ fn run(path: &str) -> Result<(), String> {
             })
         };
         let p = |n: Term| {
-            let step = p_step(n.clone());
-            Prop::Forall(Binder::new(6, |_| {
-                (vec![Prop::Nonzero(Term::cmpa(1000.into(), n.clone()))], Box::new(step))
+            Prop::Forall(Binder::new(|_| {
+                let step = p_step(n.shift());
+                (vec![Prop::Nonzero(Term::cmpa(1000.into(), n.shift()))], Box::new(step))
             }))
         };
 
         let no_overflow = |n: Term| {
             Prop::Nonzero(Term::cmpa(Term::add(n, 1.into()), 0.into()))
         };
+        eprintln!("\nprove Hzero");
         let l_zero = pf.tactic_implies_intro(vec![no_overflow(0.into())], |pf| {
             pf.rule_step_zero(|vars| {
                 p_pre_state(vars, 0.into())
@@ -145,6 +149,7 @@ fn run(path: &str) -> Result<(), String> {
             Ok(())
         })?;
 
+        eprintln!("\nprove Hsucc");
         let l_succ = pf.rule_forall_intro(
             |vars| {
                 let n = vars.fresh();
@@ -154,30 +159,35 @@ fn run(path: &str) -> Result<(), String> {
                 let lt_1000 = Prop::Nonzero(
                     Term::cmpa(1000.into(), Term::add(n.clone(), 1.into())));
                 pf.tactic_implies_intro(vec![lt_1000], |pf| {
+                    let n = n.shift();
                     let l_imp = pf.admit(Prop::implies(vec![
                         Prop::Nonzero(Term::cmpa(1000.into(), Term::add(n.clone(), 1.into()))),
                         Prop::Nonzero(Term::cmpa(Term::add(n.clone(), 1.into()), 0.into())),
                     ], Prop::Nonzero(Term::cmpa(1000.into(), n.clone()))));
-                    pf.tactic_apply0(2, l_imp)?;
+                    eprintln!("\nabout to apply 2.{l_imp}");
+                    pf.tactic_apply0(l_imp)?;
 
-                    let l_n_iters = pf.tactic_apply0(1, 1)?;
-                    let l_next_iter = pf.rule_apply(0, l_iter, &mut SubstTable::new(|v| {
-                        // FIXME
-                        if v == VarId::new(1, 0) {
-                            Term::add(n.clone(), 1.into())
-                        } else {
-                            Term::var_unchecked(v)
-                        }
-                    }))?;
+                    eprintln!("\nabout to apply 1.1");
+                    let l = pf.rule_shift(1, 1);
+                    let l_n_iters = pf.tactic_apply0(l)?;
 
+                    eprintln!("\nabout to apply 0.{l_iter}");
+                    let l_iter = pf.rule_shift(0, l_iter);
+                    let l_next_iter = pf.rule_apply(l_iter, &[Term::add(n.clone(), 1.into())])?;
+
+                    eprintln!("\nTODO: apply rule_step_seq");
+                    pf.show_context();
                     let l_n_plus_one_iters = pf.admit(p_step(Term::add(n.clone(), 1.into())));
+
+                    eprintln!();
                     Ok(())
                 })?;
                 Ok(())
             },
         )?;
 
-        let l_iters = pf.rule_induction(0, l_zero, 0, l_succ)?;
+        eprintln!("\napply induction with {l_zero}, {l_succ}");
+        let l_iters = pf.rule_induction(l_zero, l_succ)?;
 
         pf.show_context();
 

@@ -1,14 +1,21 @@
 use std::array;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::ops::Deref;
 use std::rc::Rc;
 use crate::{Word, WORD_BYTES, Addr, BinOp};
+use crate::logic::fold::Fold;
+use crate::logic::print::Printer;
+use crate::logic::shift::ShiftExt;
+use crate::logic::subst::SubstExt;
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand};
 use crate::symbolic;
 
 
 pub mod fold;
+pub mod print;
 pub mod shift;
+pub mod subst;
 
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -35,25 +42,13 @@ impl VarId {
     }
 }
 
-impl fmt::Display for VarId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let scope = self.scope();
-        let index = self.index();
-        if scope < 10 {
-            write!(f, "{}{}", (b'a' + scope as u8) as char, index) 
-        } else {
-            write!(f, "x{}_{}", scope, index)
-        }
-    }
-}
-
 
 #[derive(Clone, Debug)]
 pub struct VarCounter(VarId);
 
 impl VarCounter {
-    pub fn new(scope: u32) -> VarCounter {
-        VarCounter(VarId::new(scope, 0))
+    pub fn new() -> VarCounter {
+        VarCounter(VarId::new(0, 0))
     }
 
     pub fn fresh_var(&mut self) -> VarId {
@@ -65,10 +60,6 @@ impl VarCounter {
 
     pub fn fresh(&mut self) -> Term {
         Term::var_unchecked(self.fresh_var())
-    }
-
-    pub fn scope(&self) -> u32 {
-        self.0.scope()
     }
 
     pub fn len(&self) -> usize {
@@ -88,19 +79,45 @@ impl<T> Binder<T> {
         Binder { vars, inner }
     }
 
-    pub fn new(scope: u32, f: impl FnOnce(&mut VarCounter) -> T) -> Binder<T> {
-        let mut vars = VarCounter::new(scope);
+    pub fn new(f: impl FnOnce(&mut VarCounter) -> T) -> Binder<T> {
+        let mut vars = VarCounter::new();
         let inner = f(&mut vars);
         Binder { vars, inner }
     }
 
     pub fn try_new(
-        scope: u32,
         f: impl FnOnce(&mut VarCounter) -> Result<T, String>,
     ) -> Result<Binder<T>, String> {
-        let mut vars = VarCounter::new(scope);
+        let mut vars = VarCounter::new();
         let inner = f(&mut vars)?;
         Ok(Binder { vars, inner })
+    }
+
+    pub fn as_ref(&self) -> Binder<&T> {
+        Binder::from_parts(self.vars.clone(), &self.inner)
+    }
+
+    pub fn map<'a, F: FnOnce(&'a T) -> U, U>(&'a self, f: F) -> Binder<U> {
+        Binder::from_parts(self.vars.clone(), f(&self.inner))
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = Binder<<T as IntoIterator>::Item>>
+    where T: IntoIterator {
+        let vars = self.vars.clone();
+        self.inner.into_iter().map(move |x| Binder::from_parts(vars.clone(), x))
+    }
+
+    pub fn subst(&self, terms: &[Term]) -> T
+    where T: Fold {
+        assert_eq!(terms.len(), self.vars.len());
+        self.inner.subst(terms)
+    }
+
+    /// Like `subst`, but works on `Binder<&T>` instead of `Binder<T>`.
+    pub fn subst_ref(&self, terms: &[Term]) -> <T as Deref>::Target
+    where T: Deref, <T as Deref>::Target: Fold {
+        assert_eq!(terms.len(), self.vars.len());
+        self.inner.subst(terms)
     }
 }
 
@@ -137,7 +154,7 @@ impl Term {
     pub fn as_const_or_err(&self) -> Result<Word, String> {
         match self.0 {
             TermInner::Const(x) => Ok(x),
-            ref t => Err(format!("expected const, but got {}", t)),
+            ref t => Err(format!("expected const, but got {}", Printer::new(0).display(t))),
         }
     }
 
@@ -244,26 +261,6 @@ impl Term {
         Term::add(a, Term::const_(n))
     }
 
-    pub fn subst<S: Subst>(&self, subst: &mut S) -> Term {
-        if S::IS_IDENTITY {
-            return self.clone();
-        }
-
-        match self.0 {
-            TermInner::Var(v) => subst.subst(v).clone(),
-            TermInner::Const(x) => Term::const_(x),
-            TermInner::Not(ref a) => Term::not(a.subst(subst)),
-            TermInner::Binary(op, ref ab) => {
-                let (ref a, ref b) = **ab;
-                Term::binary(op, a.subst(subst), b.subst(subst))
-            },
-            TermInner::Mux(ref abc) => {
-                let (ref a, ref b, ref c) = **abc;
-                Term::mux(a.subst(subst), b.subst(subst), c.subst(subst))
-            },
-        }
-    }
-
     /// Substitute the variables of `a` using `a_subst`, substitute the variables of `b` using
     /// `b_subst`, and check if the resulting terms are equal.  This avoids constructing the
     /// intermediate terms when possible.
@@ -366,45 +363,6 @@ impl Term {
 
 impl From<Word> for Term {
     fn from(x: Word) -> Term { Term::const_(x) }
-}
-
-impl fmt::Display for Term {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl fmt::Display for TermInner {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            TermInner::Const(x) => write!(f, "{}", x as i64),
-            TermInner::Var(v) => write!(f, "{}", v),
-            TermInner::Not(ref t) => write!(f, "!{}", t),
-            TermInner::Binary(op, ref xy) => {
-                let (ref x, ref y) = **xy;
-                match op {
-                    BinOp::And => write!(f, "({} & {})", x, y),
-                    BinOp::Or => write!(f, "({} | {})", x, y),
-                    BinOp::Xor => write!(f, "({} ^ {})", x, y),
-                    BinOp::Add => write!(f, "({} + {})", x, y),
-                    BinOp::Sub => write!(f, "({} - {})", x, y),
-                    BinOp::Mull => write!(f, "({} * {})", x, y),
-                    BinOp::Umulh => write!(f, "umulh({}, {})", x, y),
-                    BinOp::Smulh => write!(f, "smulh({}, {})", x, y),
-                    BinOp::Udiv => write!(f, "({} / {})", x, y),
-                    BinOp::Umod => write!(f, "({} % {})", x, y),
-                    BinOp::Shl => write!(f, "({} << {})", x, y),
-                    BinOp::Shr => write!(f, "({} >> {})", x, y),
-                    BinOp::Cmpe => write!(f, "({} == {})", x, y),
-                    BinOp::Cmpa => write!(f, "({} >u {})", x, y),
-                    BinOp::Cmpae => write!(f, "({} >=u {})", x, y),
-                    BinOp::Cmpg => write!(f, "({} >s {})", x, y),
-                    BinOp::Cmpge => write!(f, "({} >=s {})", x, y),
-                }
-            },
-            TermInner::Mux(ref cte) => write!(f, "mux({}, {}, {})", cte.0, cte.1, cte.2),
-        }
-    }
 }
 
 
@@ -521,36 +479,18 @@ pub struct StatePred {
 
 impl Prop {
     pub fn implies(premises: Vec<Prop>, conclusion: Prop) -> Prop {
-        Prop::Forall(Binder::new(0, |_| (premises, Box::new(conclusion))))
+        Prop::Forall(Binder::new(|_| (premises.shift(), Box::new(conclusion.shift()))))
     }
 
     pub fn implies1(premise: Prop, conclusion: Prop) -> Prop {
         Prop::implies(vec![premise], conclusion)
     }
 
-    pub fn subst<S: Subst>(&self, subst: &mut S) -> Prop {
-        match *self {
-            Prop::Nonzero(ref t) => Prop::Nonzero(t.subst(subst)),
-            Prop::Forall(ref b) => {
-                Prop::Forall(Binder {
-                    vars: b.vars.clone(),
-                    inner: (
-                        b.inner.0.iter().map(|p| p.subst(subst)).collect(),
-                        Box::new(b.inner.1.subst(subst)),
-                    ),
-                })
-            },
-            Prop::Step(ref sp) => Prop::Step(sp.subst(subst)),
-            Prop::Reachable(ref rp) => Prop::Reachable(rp.subst(subst)),
-        }
-    }
-
     pub fn check_eq(&self, other: &Prop) -> bool {
         match (self, other) {
             (&Prop::Nonzero(ref t1), &Prop::Nonzero(ref t2)) => t1 == t2,
             (&Prop::Forall(ref b1), &Prop::Forall(ref b2)) => {
-                (b1.vars.scope() == b2.vars.scope() || b1.vars.len() == 0)
-                    && b1.vars.len() == b2.vars.len()
+                b1.vars.len() == b2.vars.len()
                     && b1.inner.0.len() == b2.inner.0.len()
                     && b1.inner.0.iter().zip(b2.inner.0.iter()).all(|(x, y)| x.check_eq(y))
                     && b1.inner.1.check_eq(&b2.inner.1)
@@ -581,18 +521,9 @@ impl Prop {
 }
 
 impl StepProp {
-    pub fn subst<S: Subst>(&self, subst: &mut S) -> StepProp {
-        StepProp {
-            pre: Binder::from_parts(self.pre.vars.clone(), self.pre.inner.subst(subst)),
-            post: Binder::from_parts(self.post.vars.clone(), self.post.inner.subst(subst)),
-            min_cycles: self.min_cycles.subst(subst),
-        }
-    }
-
     pub fn check_eq(&self, other: &StepProp) -> bool {
         let f = |x: &Binder<StatePred>, y: &Binder<StatePred>| -> bool {
-            (x.vars.scope() == y.vars.scope() || x.vars.len() == 0)
-                && x.vars.len() == y.vars.len()
+            x.vars.len() == y.vars.len()
                 && x.inner.check_eq(&y.inner)
         };
         f(&self.pre, &other.pre)
@@ -601,20 +532,7 @@ impl StepProp {
     }
 }
 
-impl ReachableProp {
-    pub fn subst<S: Subst>(&self, subst: &mut S) -> ReachableProp {
-        todo!()
-    }
-}
-
 impl StatePred {
-    pub fn subst<S: Subst>(&self, subst: &mut S) -> StatePred {
-        StatePred {
-            state: self.state.subst(subst),
-            props: self.props.iter().map(|p| p.subst(subst)).collect(),
-        }
-    }
-
     pub fn check_eq(&self, other: &StatePred) -> bool {
         self.state.check_eq(&other.state)
             && self.props.len() == other.props.len()
@@ -716,8 +634,7 @@ fn default_compare_binders<C: Comparator + ?Sized, T>(
     b2: &Binder<T>, 
     f: impl FnOnce(&mut C, &T, &T) -> bool,
 ) -> bool {
-    b1.vars.scope() == b2.vars.scope()
-        && b1.vars.len() == b2.vars.len()
+    b1.vars.len() == b2.vars.len()
         && f(cmp, &b1.inner, &b2.inner)
 }
 
@@ -806,13 +723,7 @@ impl EqAlpha {
 
 impl Comparator for EqAlpha {
     fn compare_vars(&mut self, v1: VarId, v2: VarId) -> bool {
-        let ok = v1.index() == v2.index()
-            && self.scope_map.contains(&(v1.scope(), v2.scope()));
-        v1.index() == v2.index()
-            && (self.scope_map.contains(&(v1.scope(), v2.scope()))
-                // FIXME (unsound): if either v1 or v2's scope is in `scope_map`, this is wrong
-                // (note this can only occur if the overall term is ill-formed)
-                || v1 == v2)
+        v1 == v2
     }
 
     fn compare_binders<T>(
@@ -824,163 +735,6 @@ impl Comparator for EqAlpha {
         if b1.vars.len() != b2.vars.len() {
             return false;
         }
-        if b1.vars.len() == 0 {
-            // Ignore empty binders.  This means we don't need to give proper scope IDs to empty
-            // binders.
-            return f(self, &b1.inner, &b2.inner);
-        }
-        let scope1 = b1.vars.scope();
-        let scope2 = b2.vars.scope();
-        assert!(self.scope_map.iter().all(|&(s1, s2)| {
-            s1 != scope1 && s2 != scope2
-        }));
-        self.scope_map.push((scope1, scope2));
-        let ok = f(self, &b1.inner, &b2.inner);
-        self.scope_map.pop();
-        ok
-    }
-}
-
-
-// Display impls for `Prop` and related types
-
-/// Helper for displaying the "forall x," or "exists y," part of a `Binder`.  Note that the
-/// `Display` impl prints only the variable bindings, not the inner value.
-struct DisplayBinder<'a> {
-    vars: &'a VarCounter,
-    mode: DisplayBinderMode,
-}
-
-enum DisplayBinderMode {
-    Forall,
-    Exists,
-}
-
-impl<'a> DisplayBinder<'a> {
-    fn forall<T>(b: &'a Binder<T>) -> DisplayBinder<'a> {
-        DisplayBinder {
-            vars: &b.vars,
-            mode: DisplayBinderMode::Forall,
-        }
-    }
-
-    fn exists<T>(b: &'a Binder<T>) -> DisplayBinder<'a> {
-        DisplayBinder {
-            vars: &b.vars,
-            mode: DisplayBinderMode::Exists,
-        }
-    }
-}
-
-impl fmt::Display for DisplayBinderMode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            DisplayBinderMode::Forall => write!(f, "forall"),
-            DisplayBinderMode::Exists => write!(f, "exists"),
-        }
-    }
-}
-
-impl<'a> fmt::Display for DisplayBinder<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.vars.len() {
-            0 => Ok(()),
-            1 => {
-                let v = VarId::new(self.vars.scope(), 0);
-                write!(f, "{} {}, ", self.mode, v)
-            },
-            n => {
-                let v0 = VarId::new(self.vars.scope(), 0);
-                let vn = VarId::new(self.vars.scope(), n as u32 - 1);
-                write!(f, "{} {} .. {}, ", self.mode, v0, vn)
-            },
-        }
-    }
-}
-
-impl fmt::Display for Prop {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Prop::Nonzero(ref t) => write!(f, "{}", t),
-
-            Prop::Forall(ref b) => {
-                write!(f, "{}", DisplayBinder::forall(b))?;
-
-                for hyp in &b.inner.0 {
-                    write!(f, "({}) -> ", hyp)?;
-                }
-
-                write!(f, "{}", b.inner.1)
-            },
-
-            Prop::Step(ref sp) => write!(f, "{}", sp),
-            Prop::Reachable(ref rp) => write!(f, "{}", rp),
-        }
-    }
-}
-
-impl fmt::Display for StepProp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f, "{{{}}} ->({}) {{{}}}",
-            DisplayBinderStatePred(&self.pre),
-            self.min_cycles,
-            DisplayBinderStatePred(&self.post),
-        )
-    }
-}
-
-struct DisplayBinderStatePred<'a>(&'a Binder<StatePred>);
-
-impl fmt::Display for DisplayBinderStatePred<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", DisplayBinder::exists(self.0))?;
-        write!(f, "pc = {}", self.0.inner.state.pc)?;
-
-        let mut vars_mentioned_in_props = HashSet::new();
-        for p in &self.0.inner.props {
-            p.for_each_var(&mut |v| -> Option<()> {
-                vars_mentioned_in_props.insert(v);
-                None
-            });
-        }
-        let exists_scope = self.0.vars.scope();
-        let has_constrained_var = |t: &Term| {
-            t.for_each_var(&mut |v| {
-                if vars_mentioned_in_props.contains(&v) || v.scope() != exists_scope {
-                    Some(())
-                } else {
-                    None
-                }
-            }).is_some()
-        };
-
-        for (i, t) in self.0.inner.state.regs.iter().enumerate() {
-            if let Some(v) = t.as_var() {
-                if v.scope() == exists_scope && !vars_mentioned_in_props.contains(&v) {
-                    continue;
-                }
-            }
-            write!(f, " /\\ r{} = {}", i, t)?;
-        }
-
-        for p in &self.0.inner.props {
-            write!(f, " /\\ {}", p)?;
-        }
-
-        // Skip printing the memory state for now
-        write!(f, " /\\ MEM")?;
-
-        Ok(())
-    }
-}
-
-impl fmt::Display for ReachableProp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f, "{{init}} ->({}) {{{}}}",
-            self.min_cycles,
-            DisplayBinderStatePred(&self.pred),
-        )
+        f(self, &b1.inner, &b2.inner)
     }
 }

@@ -6,6 +6,7 @@ use crate::{Word, WORD_BYTES, Addr, BinOp};
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand};
 use crate::logic::{Term, VarId, Subst, Prop};
 use crate::logic::fold::{Fold, Folder};
+use crate::logic::print::debug_print;
 
 
 pub trait Memory {
@@ -128,7 +129,7 @@ impl Memory for MemMap {
                     if t != val {
                         return Err(format!("NYI: load requires splicing bytes: \
                             at 0x{:x}, got term {}, but expected {}",
-                            addr + offset, t, val));
+                            addr + offset, debug_print(t), debug_print(&val)));
                     }
                 },
                 None => {
@@ -267,14 +268,16 @@ impl Memory for MemMulti {
     fn store(&mut self, w: MemWidth, addr: Term, val: Term, props: &[Prop]) -> Result<(), String> {
         let (offset, kind, i) = match self.find_region(addr.clone(), props) {
             Some(x) => x,
-            None => return Err(format!("couldn't find a region containing address {}", addr)),
+            None => return Err(format!(
+                "couldn't find a region containing address {}", debug_print(&addr))),
         };
         self.region_mut(kind, i).store(w, offset, val, props)
     }
     fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, String> {
         let (offset, kind, i) = match self.find_region(addr.clone(), props) {
             Some(x) => x,
-            None => return Err(format!("couldn't find a region containing address {}", addr)),
+            None => return Err(format!(
+                "couldn't find a region containing address {}", debug_print(&addr))),
         };
         self.region(kind, i).load(w, offset, props)
     }
@@ -333,6 +336,7 @@ impl State {
         self.regs[reg as usize] = val;
     }
 
+    /*
     pub fn subst<S: Subst>(&self, subst: &mut S) -> State {
         if S::IS_IDENTITY {
             return self.clone();
@@ -347,6 +351,7 @@ impl State {
             mem: self.mem.clone(),
         }
     }
+    */
 
     pub fn check_eq(&self, other: &State) -> bool {
         eprintln!("ADMITTED: MemState check_eq");

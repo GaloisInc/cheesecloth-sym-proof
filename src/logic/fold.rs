@@ -6,6 +6,9 @@ pub trait Folder {
     fn fold_var_id(&mut self, x: VarId) -> VarId {
         default_fold_var_id(self, x)
     }
+    fn fold_term(&mut self, x: &Term) -> Term {
+        default_fold_term(self, x)
+    }
     fn fold_binder<T>(&mut self, x: &Binder<T>, f: impl FnOnce(&mut Self, &T) -> T) -> Binder<T> {
         default_fold_binder(self, x, f)
     }
@@ -13,6 +16,22 @@ pub trait Folder {
 
 pub fn default_fold_var_id<F: Folder + ?Sized>(_f: &mut F, x: VarId) -> VarId {
     x
+}
+
+pub fn default_fold_term<F: Folder + ?Sized>(f: &mut F, x: &Term) -> Term {
+    match x.0 {
+        TermInner::Const(x) => Term::const_(x),
+        TermInner::Var(v) => Term::var_unchecked(v.fold_with(f)),
+        TermInner::Not(ref t) => Term::not(t.fold_with(f)),
+        TermInner::Binary(op, ref ts) => {
+            let (ref a, ref b) = **ts;
+            Term::binary(op, a.fold_with(f), b.fold_with(f))
+        },
+        TermInner::Mux(ref ts) => {
+            let (ref a, ref b, ref c) = **ts;
+            Term::mux(a.fold_with(f), b.fold_with(f), c.fold_with(f))
+        },
+    }
 }
 
 pub fn default_fold_binder<F: Folder + ?Sized, T>(
@@ -36,19 +55,7 @@ impl Fold for VarId {
 
 impl Fold for Term {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
-        match self.0 {
-            TermInner::Const(x) => Term::const_(x),
-            TermInner::Var(v) => Term::var_unchecked(v.fold_with(f)),
-            TermInner::Not(ref t) => Term::not(t.fold_with(f)),
-            TermInner::Binary(op, ref ts) => {
-                let (ref a, ref b) = **ts;
-                Term::binary(op, a.fold_with(f), b.fold_with(f))
-            },
-            TermInner::Mux(ref ts) => {
-                let (ref a, ref b, ref c) = **ts;
-                Term::mux(a.fold_with(f), b.fold_with(f), c.fold_with(f))
-            },
-        }
+        f.fold_term(self)
     }
 }
 
@@ -62,8 +69,8 @@ impl Fold for Prop {
                     (ps.fold_with(f), q.fold_with(f))
                 }))
             },
-            Prop::Step(ref sp) => Prop::Step(todo!()),
-            Prop::Reachable(ref rp) => Prop::Reachable(todo!()),
+            Prop::Step(ref sp) => Prop::Step(sp.fold_with(f)),
+            Prop::Reachable(ref rp) => Prop::Reachable(rp.fold_with(f)),
         }
     }
 }
