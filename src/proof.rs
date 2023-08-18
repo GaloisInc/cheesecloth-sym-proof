@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::iter;
 use std::mem;
 use std::ops::Deref;
 use crate::{Word, Addr};
@@ -9,6 +10,7 @@ use crate::logic::{
 use crate::logic::print::{Print, Printer, DisplayWithPrinter, debug_print};
 use crate::logic::shift::ShiftExt;
 use crate::logic::subst::SubstExt;
+use crate::logic::wf::WfExt;
 use crate::symbolic::{self, Memory};
 use crate::micro_ram::{self, Instr, Opcode, Reg, Operand, MemWidth};
 
@@ -19,9 +21,20 @@ pub struct Proof<'a> {
     /// Enclosing scopes.  `scopes[0]` is the outermost and `scopes.last()` is the innermost.  For
     /// each one, we have a list of propositions that are known to hold over the variables of that
     /// scope and outer scopes.
-    outer_scopes: Box<[&'a [Prop]]>,
+    outer_scopes: Box<[Scope<'a>]>,
 
+    /// Number of variables bound by the binder of the current scope.  This will be zero if the
+    /// current scope doesn't correspond to a binder.
+    num_vars: usize,
+
+    /// Propositions known to hold over variables in the current scope.
     props: &'a mut Vec<Prop>,
+}
+
+#[derive(Clone, Debug)]
+struct Scope<'a> {
+    num_vars: usize,
+    props: &'a [Prop],
 }
 
 impl<'a> Proof<'a> {
@@ -57,6 +70,7 @@ impl<'a> Proof<'a> {
         f(&mut Proof {
             prog,
             outer_scopes: Box::new([]),
+            num_vars: 0,
             props: &mut props,
         })?;
         Ok(props)
@@ -66,27 +80,33 @@ impl<'a> Proof<'a> {
     /// `Prop`s that are implied by the original premises.
     fn enter<R>(
         &mut self,
+        num_vars: usize,
         props: &mut Vec<Prop>,
         f: impl FnOnce(&mut Proof) -> Result<R, String>,
     ) -> Result<R, String> {
-        self.enter_owned(props, |mut pf| f(&mut pf))
+        self.enter_owned(num_vars, props, |mut pf| f(&mut pf))
     }
 
     fn enter_owned<R>(
         &mut self,
+        num_vars: usize,
         props: &mut Vec<Prop>,
         f: impl FnOnce(Proof) -> Result<R, String>,
     ) -> Result<R, String> {
-        let mut outer_scopes = Vec::<&[Prop]>::with_capacity(self.outer_scopes.len() + 1);
-        for ps in self.outer_scopes.iter() {
-            outer_scopes.push(ps);
+        let mut outer_scopes = Vec::<Scope>::with_capacity(self.outer_scopes.len() + 1);
+        for s in self.outer_scopes.iter() {
+            outer_scopes.push(s.clone());
         }
-        outer_scopes.push(self.props);
+        outer_scopes.push(Scope {
+            num_vars: self.num_vars,
+            props: self.props,
+        });
         let outer_scopes = outer_scopes.into_boxed_slice();
 
         f(Proof {
             prog: self.prog,
             outer_scopes,
+            num_vars,
             props,
         })
     }
@@ -95,22 +115,19 @@ impl<'a> Proof<'a> {
         &mut self,
         f: impl FnOnce(Proof) -> Result<R, String>,
     ) -> Result<R, String> {
-        let mut outer_scopes = Vec::<&[Prop]>::with_capacity(self.outer_scopes.len());
-        for ps in self.outer_scopes.iter() {
-            outer_scopes.push(ps);
-        }
-        let outer_scopes = outer_scopes.into_boxed_slice();
+        let outer_scopes = self.outer_scopes.clone();
 
         f(Proof {
             prog: self.prog,
             outer_scopes,
+            num_vars: self.num_vars,
             props: self.props,
         })
     }
 
     pub fn show_context(&self) {
-        for (i, ps) in self.outer_scopes.iter().rev().enumerate() {
-            for (j, p) in ps.iter().enumerate() {
+        for (i, s) in self.outer_scopes.iter().rev().enumerate() {
+            for (j, p) in s.props.iter().enumerate() {
                 eprintln!("{}.{}: {}", i, j, self.print_depth(i as u32, p));
             }
         }
@@ -122,6 +139,14 @@ impl<'a> Proof<'a> {
     }
 
     fn add_prop(&mut self, prop: Prop) -> usize {
+        #[cfg(debug_assertions)] {
+            let num_vars = self.outer_scopes.iter().map(|s| s.num_vars)
+                .chain(iter::once(self.num_vars))
+                .collect::<Vec<_>>();
+            if let Err(e) = prop.check_wf(num_vars) {
+                panic!("tried to add ill-formed proposition {}\n{}", self.print(&prop), e);
+            }
+        }
         let depth = self.outer_scopes.len();
         let i = self.props.len();
         println!("proved {}.{}: {}", depth, i, self.print(&prop));
@@ -134,8 +159,8 @@ impl<'a> Proof<'a> {
     pub fn rule_shift(&mut self, depth: usize, index: usize) -> usize {
         let amount = (self.outer_scopes.len() - depth) as u32;
         eprintln!("rule_shift: shift by {amount}, prop = {}",
-            self.print_depth(depth as u32, &self.outer_scopes[depth][index]));
-        let prop = self.outer_scopes[depth][index].shift_by(amount);
+            self.print_depth(depth as u32, &self.outer_scopes[depth].props[index]));
+        let prop = self.outer_scopes[depth].props[index].shift_by(amount);
         self.add_prop(prop)
     }
 
@@ -152,9 +177,9 @@ impl<'a> Proof<'a> {
 
     /// Ensure that `premise` appears somewhere in the current scope.
     fn require_premise(&self, premise: &Prop) -> Result<(), String> {
-        for (i, ps) in self.outer_scopes.iter().enumerate() {
+        for (i, s) in self.outer_scopes.iter().enumerate() {
             let shift_amount = (self.outer_scopes.len() - i) as u32;
-            for p in ps.iter() {
+            for p in s.props.iter() {
                 if premise.check_eq(&p.shift_by(shift_amount)) {
                     return Ok(())
                 }
@@ -170,9 +195,9 @@ impl<'a> Proof<'a> {
     }
 
     fn require_premise_shifted(&self, shift: u32, premise: &Prop) -> Result<(), String> {
-        for (i, ps) in self.outer_scopes.iter().enumerate() {
+        for (i, s) in self.outer_scopes.iter().enumerate() {
             let shift_amount = shift + (self.outer_scopes.len() - i) as u32;
-            for p in ps.iter() {
+            for p in s.props.iter() {
                 if premise.check_eq(&p.shift_by(shift_amount)) {
                     return Ok(())
                 }
@@ -238,7 +263,7 @@ impl<'a> Proof<'a> {
             for (i, p) in premises.iter().enumerate() {
                 eprintln!("introduced {}.{}: {}", inner_depth, i, self.print_adj(1, p));
             }
-            self.enter(&mut props, |pf| prove(pf, extra))?;
+            self.enter(vars.len(), &mut props, |pf| prove(pf, extra))?;
             let conclusion = props.pop().unwrap();
             Ok((premises, Box::new(conclusion)))
         })?;
