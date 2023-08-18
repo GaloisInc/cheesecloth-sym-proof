@@ -7,6 +7,7 @@ use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand};
 use crate::logic::{Term, VarId, Subst, Prop};
 use crate::logic::fold::{Fold, Folder};
 use crate::logic::print::debug_print;
+use crate::logic::visit::{Visit, Visitor};
 
 
 pub trait Memory {
@@ -380,6 +381,14 @@ impl State {
         Ok(())
     }
     */
+}
+
+impl Visit for State {
+    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+        let State { pc, ref regs, ref mem } = *self;
+        regs.visit_with(f);
+        eprintln!("ADMITTED: Visit for MemState ({})", std::any::type_name::<F>());
+    }
 }
 
 impl Fold for State {
