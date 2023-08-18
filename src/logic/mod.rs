@@ -17,6 +17,7 @@ pub mod print;
 pub mod shift;
 pub mod subst;
 pub mod visit;
+pub mod wf;
 
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
