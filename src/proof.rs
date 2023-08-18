@@ -298,6 +298,19 @@ impl<'a> Proof<'a> {
         self.add_prop(prop)
     }
 
+    fn take_step_prop(&mut self, index: usize) -> Result<StepProp, String> {
+        let dummy_prop = Prop::Nonzero(1.into());
+        match mem::replace(&mut self.props[index], dummy_prop) {
+            Prop::Step(sp) => Ok(sp),
+            prop => {
+                let msg = format!("expected step at index {}, but got {}",
+                    index, self.print(&prop));
+                self.props[index] = prop;
+                Err(msg)
+            },
+        }
+    }
+
     /// Extend a `Prop::Step`, mutating it into another `Prop::Step` that's implied by the
     /// original.
     pub fn rule_step_extend<R>(
@@ -305,20 +318,34 @@ impl<'a> Proof<'a> {
         index: usize,
         f: impl FnOnce(&mut StepProof) -> Result<R, String>,
     ) -> Result<R, String> {
-        let dummy_prop = Prop::Nonzero(1.into());
-        let mut sp = match mem::replace(&mut self.props[index], dummy_prop) {
-            Prop::Step(sp) => sp,
-            prop => {
-                let msg = format!("rule_step_extend expected step, but got {}", self.print(&prop));
-                self.props[index] = prop;
-                return Err(msg);
-            },
-        };
+        let mut sp = self.take_step_prop(index)?;
         let r = self.reenter_owned(|pf| {
             f(&mut StepProof { pf, sp: &mut sp })
         });
         self.props[index] = Prop::Step(sp);
         r
+    }
+
+    /// Join two `Prop::Step`s together.  Both inputs will be consumed (replaced with the trivial
+    /// proposition `1`).
+    pub fn rule_step_seq(
+        &mut self,
+        index1: usize,
+        index2: usize,
+    ) -> Result<usize, String> {
+        // Note this may destroy both props on error.
+        let sp1 = self.take_step_prop(index1)?;
+        let sp2 = self.take_step_prop(index2)?;
+
+        eprintln!("ADMITTED: implication of middle states ({}) => ({})",
+            self.print(&PrintBinder::exists(&sp1.post)),
+            self.print(&PrintBinder::exists(&sp2.pre)));
+
+        Ok(self.add_prop(Prop::Step(StepProp {
+            pre: sp1.pre,
+            post: sp2.post,
+            min_cycles: Term::add(sp1.min_cycles, sp2.min_cycles),
+        })))
     }
 
     /// Admit as an axiom that the program can execute at least `min_cycles` and end in the given

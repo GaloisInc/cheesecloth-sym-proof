@@ -175,9 +175,9 @@ fn run(path: &str) -> Result<(), String> {
                     let l_iter = pf.rule_shift(0, l_iter);
                     let l_next_iter = pf.rule_apply(l_iter, &[Term::add(n.clone(), 1.into())])?;
 
-                    eprintln!("\nTODO: apply rule_step_seq");
+                    eprintln!("\napply rule_step_seq");
                     pf.show_context();
-                    let l_n_plus_one_iters = pf.admit(p_step(Term::add(n.clone(), 1.into())));
+                    let l_n_plus_one_iters = pf.rule_step_seq(l_next_iter, l_n_iters)?;
 
                     eprintln!();
                     Ok(())
