@@ -190,7 +190,7 @@ impl Term {
         match op {
             BinOp::Add => {
                 // Put the constant on the right whenever possible.
-                if matches!(a.0, TermInner::Const(_)) {
+                if a.is_const() && !b.is_const() {
                     return Term::add(b, a);
                 }
                 // When adding to an existing `x + c`, fold the constants together.
@@ -213,6 +213,27 @@ impl Term {
                         return a;
                     }
                     return Term::add(a, Term::const_(bc.wrapping_neg()));
+                }
+            },
+            BinOp::Mull => {
+                // Put the constant on the right whenever possible.
+                if a.is_const() && !b.is_const() {
+                    return Term::mull(b, a);
+                }
+                // Turn `(x + y) * c` into `x * c + y * c` if either `x` or `y` is a constant.
+                if let Some(bc) = b.as_const() {
+                    if bc == 0 {
+                        return Term::const_(0);
+                    }
+                    if let TermInner::Binary(BinOp::Add, ref xy) = a.0 {
+                        let (ref x, ref y) = **xy;
+                        if x.is_const() || y.is_const() {
+                            return Term::add(
+                                Term::mull(x.clone(), b.clone()),
+                                Term::mull(y.clone(), b.clone()),
+                            );
+                        }
+                    }
                 }
             },
             _ => {},
