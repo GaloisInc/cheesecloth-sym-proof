@@ -79,8 +79,8 @@ impl Fold for StepProp {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
         let StepProp { ref pre, ref post, ref min_cycles } = *self;
         StepProp {
-            pre: f.fold_binder(pre, |f, sp| sp.fold_with(f)),
-            post: f.fold_binder(post, |f, sp| sp.fold_with(f)),
+            pre: pre.fold_with(f),
+            post: post.fold_with(f),
             min_cycles: min_cycles.fold_with(f),
         }
     }
@@ -90,7 +90,7 @@ impl Fold for ReachableProp {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
         let ReachableProp { ref pred, ref min_cycles } = *self;
         ReachableProp {
-            pred: f.fold_binder(pred, |f, sp| sp.fold_with(f)),
+            pred: pred.fold_with(f),
             min_cycles: min_cycles.fold_with(f),
         }
     }
@@ -105,6 +105,13 @@ impl Fold for StatePred {
         }
     }
 }
+
+impl<T: Fold> Fold for Binder<T> {
+    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+        f.fold_binder(self, |f, x| x.fold_with(f))
+    }
+}
+
 
 impl<T: Fold> Fold for Box<T> {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
