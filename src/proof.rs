@@ -172,8 +172,6 @@ impl<'a> Proof<'a> {
     /// to make it valid in the current scope.
     pub fn rule_shift(&mut self, depth: usize, index: usize) -> usize {
         let amount = (self.outer_scopes.len() - depth) as u32;
-        eprintln!("rule_shift: shift by {amount}, prop = {}",
-            self.print_depth(depth as u32, &self.outer_scopes[depth].props[index]));
         let prop = self.outer_scopes[depth].props[index].shift_by(amount);
         self.add_prop(prop)
     }
@@ -249,6 +247,7 @@ impl<'a> Proof<'a> {
         Ok(self.add_prop(conclusion.subst_ref(args)))
     }
 
+    /// Apply a `Prop::Forall` with no bound variables.
     pub fn tactic_apply0(
         &mut self,
         index: usize,
@@ -256,7 +255,7 @@ impl<'a> Proof<'a> {
         self.rule_apply(index, &[])
     }
 
-    /// Prove a theorem of the form `forall xs, Ps(xs) => Q(xs)`.  `mk_premises` sets up `xs` and
+    /// Prove a theorem of the form `forall xs, Ps(xs) -> Q(xs)`.  `mk_premises` sets up `xs` and
     /// `Ps`, and it can return some extra data such as `VarId`s to be passed to `prove`.  `prove`
     /// derives some conclusion from the premises.  After running `prove`, the final `Prop` it
     /// proved becomes the conclusion of the `forall`.
@@ -284,6 +283,11 @@ impl<'a> Proof<'a> {
         Ok(self.add_prop(Prop::Forall(b)))
     }
 
+    /// Introduce an implication `Ps -> Q`.  This is similar to `rule_forall_intro`, but with no
+    /// bound variables.
+    ///
+    /// However, note that `prove` still runs under a binder (though this binder has no vars), so
+    /// it's necessary to `shift` outer terms before using them.
     pub fn tactic_implies_intro(
         &mut self,
         premises: Vec<Prop>,
@@ -341,7 +345,17 @@ impl<'a> Proof<'a> {
     }
 
     /// Join two `Prop::Step`s together.  Both inputs will be consumed (replaced with the trivial
-    /// proposition `1`).
+    /// proposition `1`); apply `rule_clone` first if you want to use an input afterward.
+    ///
+    /// To join two `Prop::Step`s, it's necessary to show that any state satisfying the `post`
+    /// predicate of the first `Step` will also satisfy the `pre` predicate of the second `Step`.
+    /// That is, we must show `forall s, (exists xs, post1(s, xs)) -> (exists ys, pre2(s, ys))`, or
+    /// equivalently, `forall s xs, post1(s, xs) -> exists ys, pre2(s, ys)`.  To achieve this, this
+    /// function takes a substitution, called `witness`, that provides a value for each `ys` in
+    /// terms of `xs`, and then require that `forall s, post1(s, xs) == pre2(s, witness(xs))`.
+    /// That is, the two `StatePred`s must be identical after applying the substitution.  In cases
+    /// where `post1` and `pre2` are not sufficiently similar, `post1` should be modified by
+    /// applying `rule_step_extend` to the first `Prop::Step`.
     pub fn rule_step_seq(
         &mut self,
         index1: usize,
@@ -398,6 +412,9 @@ impl<'a> Proof<'a> {
     /// -> ... -> P (2^64 - 2) -> P (2^64 - 1)`.  We can't extend this chain any further because
     /// `Hsucc` no longer applies (`(2^64 - 1) + 1 = 0`), but we've already covered all 2^64
     /// possible values of `n`.
+    ///
+    /// We take only the indices of the lemmas `Hzero` and `Hsucc` as inputs.  The predicate `P` is
+    /// inferred from the second premise of `Hsucc`.
     pub fn rule_induction(
         &mut self,
         zero_index: usize,
@@ -478,9 +495,10 @@ pub struct StepProof<'a> {
 }
 
 impl<'a> StepProof<'a> {
-    fn pc(&self) -> Addr {
+    pub fn pc(&self) -> Addr {
         self.sp.post.inner.state.pc
     }
+
     fn fetch_instr(&self) -> Result<Instr, String> {
         let pc = self.pc();
         self.pf.prog.get(&pc).cloned()
@@ -504,7 +522,7 @@ impl<'a> StepProof<'a> {
     }
 
     fn mem_load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
-        todo!()
+        Err("StepProof::mem_load not yet implemented".into())
     }
 
     fn finish_instr(&mut self) {
@@ -646,6 +664,22 @@ impl<'a> StepProof<'a> {
 
         eprintln!("run {}: {:?} (load_fresh)", self.pc(), instr);
         self.finish_instr();
+        Ok(())
+    }
+
+    /// Apply `rule_step` repeatedly until it returns `Err`.
+    pub fn tactic_run(&mut self) {
+        while self.rule_step().is_ok() {
+            // No-op
+        }
+    }
+
+    /// Apply `rule_step` until we reach the given `pc`.  Returns `Err` if `rule_step` reports an
+    /// error before `pc` is reached.
+    pub fn tactic_run_until(&mut self, pc: Addr) -> Result<(), String> {
+        while self.pc() != pc {
+            self.rule_step()?;
+        }
         Ok(())
     }
 
