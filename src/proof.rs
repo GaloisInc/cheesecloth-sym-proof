@@ -346,14 +346,23 @@ impl<'a> Proof<'a> {
         &mut self,
         index1: usize,
         index2: usize,
+        witness: &[Term],
     ) -> Result<usize, String> {
         // Note this may destroy both props on error.
         let sp1 = self.take_step_prop(index1)?;
         let sp2 = self.take_step_prop(index2)?;
 
-        eprintln!("ADMITTED: implication of middle states ({}) => ({})",
-            self.print(&PrintBinder::exists(&sp1.post)),
-            self.print(&PrintBinder::exists(&sp2.pre)));
+        let mid1 = sp1.post;
+        let mid2 = sp2.pre;
+        let mid2 = Binder::from_parts(mid1.vars.clone(), mid2.shift().inner.subst(witness));
+
+        if !mid1.inner.check_eq(&mid2.inner) {
+            return Err(format!(
+                "step1 post state ({}) does not match step2 pre state ({})",
+                self.printer().verbose(true).display(&PrintBinder::exists(&mid1)),
+                self.printer().verbose(true).display(&PrintBinder::exists(&mid2)),
+            ));
+        }
 
         Ok(self.add_prop(Prop::Step(StepProp {
             pre: sp1.pre,

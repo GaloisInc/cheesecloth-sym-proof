@@ -176,8 +176,16 @@ fn run(path: &str) -> Result<(), String> {
                     let l_next_iter = pf.rule_apply(l_iter, &[Term::add(n.clone(), 1.into())])?;
 
                     eprintln!("\napply rule_step_seq");
-                    pf.show_context();
-                    let l_n_plus_one_iters = pf.rule_step_seq(l_next_iter, l_n_iters)?;
+                    //pf.show_context_verbose();
+                    let witness: [_; 33] = array::from_fn(|i| match i {
+                        11 => Term::var_unchecked(VarId::new(0, 34)),
+                        13 => Term::var_unchecked(VarId::new(0, 35)),
+                        14 => Term::var_unchecked(VarId::new(0, 36)),
+                        15 => Term::var_unchecked(VarId::new(0, 37)),
+                        32 => Term::var_unchecked(VarId::new(0, 38)),
+                        _ => Term::var_unchecked(VarId::new(0, i as _)),
+                    });
+                    let l_n_plus_one_iters = pf.rule_step_seq(l_next_iter, l_n_iters, &witness)?;
 
                     eprintln!();
                     Ok(())
@@ -189,6 +197,7 @@ fn run(path: &str) -> Result<(), String> {
         eprintln!("\napply induction with {l_zero}, {l_succ}");
         let l_iters = pf.rule_induction(l_zero, l_succ)?;
 
+        eprintln!("\nfinal context:");
         pf.show_context();
 
         Ok(())
