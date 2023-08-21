@@ -45,7 +45,7 @@ impl VarId {
 }
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct VarCounter(VarId);
 
 impl VarCounter {
@@ -70,7 +70,7 @@ impl VarCounter {
 }
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Binder<T> {
     pub vars: VarCounter,
     pub inner: T,
@@ -284,45 +284,6 @@ impl Term {
         Term::add(a, Term::const_(n))
     }
 
-    /// Substitute the variables of `a` using `a_subst`, substitute the variables of `b` using
-    /// `b_subst`, and check if the resulting terms are equal.  This avoids constructing the
-    /// intermediate terms when possible.
-    pub fn check_eq_subst<AS, BS>(a: &Term, a_subst: &mut AS, b: &Term, b_subst: &mut BS) -> bool
-    where AS: Subst, BS: Subst {
-        match (&a.0, &b.0) {
-            // Substitution cases.  We skip calling `subst` when `IS_IDENTITY` is set.
-            (&TermInner::Var(av), &TermInner::Var(bv)) if !AS::IS_IDENTITY && !BS::IS_IDENTITY => {
-                a_subst.subst(av) == b_subst.subst(bv)
-            },
-            (&TermInner::Var(av), _) if !AS::IS_IDENTITY =>
-                Term::check_eq_subst(a_subst.subst(av), &mut IdentitySubsts::new(), b, b_subst),
-            (_, &TermInner::Var(bv)) if !BS::IS_IDENTITY =>
-                Term::check_eq_subst(a, a_subst, b_subst.subst(bv), &mut IdentitySubsts::new()),
-
-            (&TermInner::Const(ax), &TermInner::Const(bx)) => ax == bx,
-            // This `Var` case is only reachable when both `Subst`s are the identity.
-            (&TermInner::Var(av), &TermInner::Var(bv)) => av == bv,
-            (&TermInner::Not(ref at), &TermInner::Not(ref bt)) =>
-                Term::check_eq_subst(at, a_subst, bt, b_subst),
-            (&TermInner::Binary(a_op, ref ats), &TermInner::Binary(b_op, ref bts)) => {
-                let (ref at1, ref at2) = **ats;
-                let (ref bt1, ref bt2) = **bts;
-                a_op == b_op
-                    && Term::check_eq_subst(at1, a_subst, bt1, b_subst)
-                    && Term::check_eq_subst(at2, a_subst, bt2, b_subst)
-            },
-            (&TermInner::Mux(ref ats), &TermInner::Mux(ref bts)) => {
-                let (ref at1, ref at2, ref at3) = **ats;
-                let (ref bt1, ref bt2, ref bt3) = **bts;
-                Term::check_eq_subst(at1, a_subst, bt1, b_subst)
-                    && Term::check_eq_subst(at2, a_subst, bt2, b_subst)
-                    && Term::check_eq_subst(at3, a_subst, bt3, b_subst)
-            },
-
-            _ => false,
-        }
-    }
-
     /* TODO: using a slice for `vars` doesn't work with multiple var scopes
     pub fn eval(&self, vars: &[Word]) -> Word {
         match self.0 {
@@ -447,7 +408,7 @@ impl<F: FnMut(VarId) -> Term> Subst for SubstTable<F> {
 }
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Prop {
     /// `t != 0`
     Nonzero(Term),
@@ -472,7 +433,7 @@ pub enum Prop {
 /// `s` and `s'` are not represented specifically; the `forall s` and `exists s'` parts are "built
 /// in" so that we don't need to support arbitrary quantification over states (`Prop::Forall` only
 /// allows quantifying over `Word`s).  `n` also isn't represented explicitly.
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct StepProp {
     pub pre: Binder<StatePred>,
     pub post: Binder<StatePred>,
@@ -487,14 +448,14 @@ pub struct StepProp {
 ///
 /// In other words, there is an execution of length at least `min_cycles` that ends in a state
 /// matching `pred`.
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ReachableProp {
     pub pred: Binder<StatePred>,
     pub min_cycles: Term,
 }
 
 /// A predicate `P(s)` on states.  The predicate holds if `s == state` and all `props` hold.
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct StatePred {
     pub state: symbolic::State,
     pub props: Vec<Prop>,
@@ -507,21 +468,6 @@ impl Prop {
 
     pub fn implies1(premise: Prop, conclusion: Prop) -> Prop {
         Prop::implies(vec![premise], conclusion)
-    }
-
-    pub fn check_eq(&self, other: &Prop) -> bool {
-        match (self, other) {
-            (&Prop::Nonzero(ref t1), &Prop::Nonzero(ref t2)) => t1 == t2,
-            (&Prop::Forall(ref b1), &Prop::Forall(ref b2)) => {
-                b1.vars.len() == b2.vars.len()
-                    && b1.inner.0.len() == b2.inner.0.len()
-                    && b1.inner.0.iter().zip(b2.inner.0.iter()).all(|(x, y)| x.check_eq(y))
-                    && b1.inner.1.check_eq(&b2.inner.1)
-            },
-            (&Prop::Step(ref sp1), &Prop::Step(ref sp2)) => sp1.check_eq(sp2),
-            (&Prop::Reachable(_), &Prop::Reachable(_)) => false, // TODO
-            _ => false,
-        }
     }
 
     pub fn for_each_var<T>(&self, mut f: &mut impl FnMut(VarId) -> Option<T>) -> Option<T> {
@@ -540,26 +486,6 @@ impl Prop {
             Prop::Step(_) => None,
             Prop::Reachable(_) => None,
         }
-    }
-}
-
-impl StepProp {
-    pub fn check_eq(&self, other: &StepProp) -> bool {
-        let f = |x: &Binder<StatePred>, y: &Binder<StatePred>| -> bool {
-            x.vars.len() == y.vars.len()
-                && x.inner.check_eq(&y.inner)
-        };
-        f(&self.pre, &other.pre)
-            && f(&self.post, &other.post)
-            && self.min_cycles == other.min_cycles
-    }
-}
-
-impl StatePred {
-    pub fn check_eq(&self, other: &StatePred) -> bool {
-        self.state.check_eq(&other.state)
-            && self.props.len() == other.props.len()
-            && self.props.iter().zip(other.props.iter()).all(|(x, y)| x.check_eq(y))
     }
 }
 

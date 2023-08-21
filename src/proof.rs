@@ -5,13 +5,13 @@ use std::ops::Deref;
 use crate::{Word, Addr};
 use crate::logic::{
     Term, VarId, VarCounter, Binder, Prop, StepProp, ReachableProp, StatePred, Subst, SubstTable,
-    IdentitySubsts, EqAlpha,
+    IdentitySubsts,
 };
 use crate::logic::print::{Print, Printer, DisplayWithPrinter, debug_print, PrintBinder};
 use crate::logic::shift::ShiftExt;
 use crate::logic::subst::SubstExt;
 use crate::logic::wf::WfExt;
-use crate::symbolic::{self, Memory};
+use crate::symbolic::{self, Memory, MemState, MemLog};
 use crate::micro_ram::{self, Instr, Opcode, Reg, Operand, MemWidth};
 
 
@@ -194,13 +194,13 @@ impl<'a> Proof<'a> {
         for (i, s) in self.outer_scopes.iter().enumerate() {
             let shift_amount = (self.outer_scopes.len() - i) as u32;
             for p in s.props.iter() {
-                if premise.check_eq(&p.shift_by(shift_amount)) {
+                if *premise == p.shift_by(shift_amount) {
                     return Ok(())
                 }
             }
         }
         for p in self.props.iter() {
-            if premise.check_eq(p) {
+            if premise == p {
                 return Ok(())
             }
         }
@@ -212,13 +212,13 @@ impl<'a> Proof<'a> {
         for (i, s) in self.outer_scopes.iter().enumerate() {
             let shift_amount = shift + (self.outer_scopes.len() - i) as u32;
             for p in s.props.iter() {
-                if premise.check_eq(&p.shift_by(shift_amount)) {
+                if *premise == p.shift_by(shift_amount) {
                     return Ok(())
                 }
             }
         }
         for p in self.props.iter() {
-            if premise.check_eq(&p.shift_by(shift)) {
+            if premise == &p.shift_by(shift) {
                 return Ok(())
             }
         }
@@ -356,7 +356,7 @@ impl<'a> Proof<'a> {
         let mid2 = sp2.pre;
         let mid2 = Binder::from_parts(mid1.vars.clone(), mid2.shift().inner.subst(witness));
 
-        if !mid1.inner.check_eq(&mid2.inner) {
+        if mid1.inner != mid2.inner {
             return Err(format!(
                 "step1 post state ({}) does not match step2 pre state ({})",
                 self.printer().verbose(true).display(&PrintBinder::exists(&mid1)),
@@ -430,7 +430,7 @@ impl<'a> Proof<'a> {
             Prop::Nonzero(Term::cmpa(Term::add(vars.fresh(), 1.into()), 0.into()))
         });
         debug_assert_eq!(succ_binder.vars.len(), expect_no_overflow.vars.len());
-        if !EqAlpha::compare_props(&no_overflow.inner, &expect_no_overflow.inner) {
+        if *no_overflow.inner != expect_no_overflow.inner {
             return Err(format!("expected Hsucc first premise to be ({}), but got ({})",
                 self.print(&PrintBinder::forall(&expect_no_overflow)),
                 self.print(&PrintBinder::forall(&no_overflow))));
@@ -440,7 +440,7 @@ impl<'a> Proof<'a> {
             let predicate = predicate.map(|prop| prop.shift_free(1, 1));
             predicate.subst(&[Term::add(vars.fresh(), 1.into())])
         });
-        if !EqAlpha::compare_props(&conclusion.inner, &expect_conclusion.inner) {
+        if *conclusion.inner != expect_conclusion.inner {
             return Err(format!("expected Hsucc conclusion to be ({}), but got ({})",
                 self.print(&PrintBinder::forall(&expect_conclusion)),
                 self.print(&PrintBinder::forall(&conclusion))));
@@ -451,7 +451,7 @@ impl<'a> Proof<'a> {
         // Check that `Hzero` has the form `P 0`.
         let zero_prop = &self.props[zero_index];
         let expect_zero = predicate.subst_ref(&[0.into()]);
-        if !EqAlpha::compare_props(&zero_prop, &expect_zero) {
+        if *zero_prop != expect_zero {
             return Err(format!("expected Hzero to be ({}), but got ({})",
                 self.print(&expect_zero), self.print(zero_prop)));
         }
@@ -520,7 +520,7 @@ impl<'a> StepProof<'a> {
 
     fn require_premise(&self, premise: &Prop) -> Result<(), String> {
         // Check `sp.props` first.
-        if self.sp.post.inner.props.iter().any(|p| premise.check_eq(p)) {
+        if self.sp.post.inner.props.contains(premise) {
             return Ok(())
         }
 
@@ -653,5 +653,10 @@ impl<'a> StepProof<'a> {
     pub fn rule_forget_reg(&mut self, reg: Reg) {
         let z = self.fresh_var();
         self.set_reg(reg, z);
+    }
+
+    /// Forget all known facts about memory.
+    pub fn rule_forget_mem(&mut self) {
+        self.sp.post.inner.state.mem = MemState::Log(MemLog::new());
     }
 }

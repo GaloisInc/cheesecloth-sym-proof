@@ -98,6 +98,7 @@ fn run(path: &str) -> Result<(), String> {
                     for &r in &[11, 13, 14, 15, 32] {
                         spf.rule_forget_reg(r);
                     }
+                    spf.rule_forget_mem();
                     Ok(())
                 })?;
                 Ok(())

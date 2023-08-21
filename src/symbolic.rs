@@ -15,7 +15,7 @@ pub trait Memory {
     fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, String>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum MemState {
     Concrete(MemConcrete),
     Map(MemMap),
@@ -45,7 +45,7 @@ impl Memory for MemState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemConcrete {
     pub m: HashMap<Addr, Word>,
     pub max: Addr,
@@ -74,7 +74,7 @@ impl Memory for MemConcrete {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemMap {
     /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
     /// `Term`.  The `u8` gives the index of the byte to extract in little-endian order.
@@ -149,7 +149,7 @@ impl Memory for MemMap {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemSnapshot {
     pub base: Addr,
 }
@@ -165,9 +165,17 @@ impl Memory for MemSnapshot {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemLog {
     pub l: Vec<(Term, Term, MemWidth)>,
+}
+
+impl MemLog {
+    pub fn new() -> MemLog {
+        MemLog {
+            l: Vec::new(),
+        }
+    }
 }
 
 impl Memory for MemLog {
@@ -188,7 +196,7 @@ impl Memory for MemLog {
 /// `MemState`.  This allows things like using `MemConcrete` in a symbolic-base `objs` entry: the
 /// symbolic base address is subtracted out, and the `MemConcrete` is accessed only at a concrete
 /// offset.
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemMulti {
     /// Memory regions with concrete bounds.  Each entry is `(start, end, mem)`.
     pub conc: Vec<(u64, u64, MemState)>,
@@ -254,9 +262,7 @@ impl MemMulti {
         for (start, end, kind, i) in region_iter {
             let lo = Prop::Nonzero(Term::cmpae(addr.clone(), start.clone()));
             let hi = Prop::Nonzero(Term::cmpa(end, addr.clone()));
-            let found_lo = props.iter().any(|p| lo.check_eq(p));
-            let found_hi = props.iter().any(|p| hi.check_eq(p));
-            if found_lo && found_hi {
+            if props.contains(&lo) && props.contains(&lo) {
                 return Some((Term::sub(addr, start), kind, i));
             }
         }
@@ -294,7 +300,7 @@ impl Memory for MemMulti {
 /// * `s.mem` satisfies the predicate `self.mem`.
 ///
 /// TODO: Clarify details of the memory predicate
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct State {
     pub pc: Word,
     pub regs: [Term; NUM_REGS],
