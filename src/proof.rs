@@ -126,15 +126,29 @@ impl<'a> Proof<'a> {
     }
 
     pub fn show_context(&self) {
+        self.show_context_common(false);
+    }
+
+    pub fn show_context_verbose(&self) {
+        self.show_context_common(true);
+    }
+
+    fn show_context_common(&self, verbose: bool) {
         for (i, s) in self.outer_scopes.iter().rev().enumerate() {
             for (j, p) in s.props.iter().enumerate() {
-                eprintln!("{}.{}: {}", i, j, self.print_depth(i as u32, p));
+                eprintln!(
+                    "{}.{}: {}", i, j,
+                    self.printer_depth(i as u32).verbose(verbose).display(p),
+                );
             }
         }
 
         let i = self.outer_scopes.len();
         for (j, p) in self.props.iter().enumerate() {
-            eprintln!("{}.{}: {}", i, j, self.print(p));
+            eprintln!(
+                "{}.{}: {}", i, j,
+                self.printer_depth(i as u32).verbose(verbose).display(p),
+            );
         }
     }
 

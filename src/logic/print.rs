@@ -11,11 +11,19 @@ use super::{VarId, Term, TermInner, Prop, StepProp, ReachableProp, StatePred, Bi
 #[derive(Clone, Debug)]
 pub struct Printer {
     scope_depth: u32,
+    verbose: bool,
 }
 
 impl Printer {
     pub fn new(scope_depth: u32) -> Printer {
-        Printer { scope_depth }
+        Printer {
+            scope_depth,
+            verbose: false,
+        }
+    }
+
+    pub fn verbose(self, verbose: bool) -> Self {
+        Printer { verbose, ..self }
     }
 
     pub fn display<'a, T: Print>(&self, x: &'a T) -> DisplayWithPrinter<'a, T> {
@@ -25,6 +33,7 @@ impl Printer {
     pub fn enter_binder<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
         let inner = Printer {
             scope_depth: self.scope_depth + 1,
+            verbose: self.verbose,
         };
         f(&inner)
     }
@@ -233,7 +242,7 @@ impl Print for StatePred {
 
         for (i, t) in self.state.regs.iter().enumerate() {
             if let Some(v) = t.as_var() {
-                if v.scope() == 0 && !vars_mentioned_in_props.contains(&v) {
+                if !p.verbose && v.scope() == 0 && !vars_mentioned_in_props.contains(&v) {
                     // `v` is an unconstrained existential, so register `i` is unconstrained.
                     continue;
                 }
