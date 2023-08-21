@@ -15,6 +15,7 @@ pub trait Memory {
     fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, String>;
 }
 
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum MemState {
     Concrete(MemConcrete),
@@ -45,6 +46,31 @@ impl Memory for MemState {
     }
 }
 
+impl Visit for MemState {
+    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+        match *self {
+            MemState::Concrete(ref m) => m.visit_with(f),
+            MemState::Map(ref m) => m.visit_with(f),
+            MemState::Snapshot(ref m) => m.visit_with(f),
+            MemState::Log(ref m) => m.visit_with(f),
+            MemState::Multi(ref m) => m.visit_with(f),
+        }
+    }
+}
+
+impl Fold for MemState {
+    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+        match *self {
+            MemState::Concrete(ref m) => MemState::Concrete(m.fold_with(f)),
+            MemState::Map(ref m) => MemState::Map(m.fold_with(f)),
+            MemState::Snapshot(ref m) => MemState::Snapshot(m.fold_with(f)),
+            MemState::Log(ref m) => MemState::Log(m.fold_with(f)),
+            MemState::Multi(ref m) => MemState::Multi(m.fold_with(f)),
+        }
+    }
+}
+
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemConcrete {
     pub m: HashMap<Addr, Word>,
@@ -73,6 +99,24 @@ impl Memory for MemConcrete {
         Ok(Term::const_(val))
     }
 }
+
+impl Visit for MemConcrete {
+    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+        let MemConcrete { m: _, max: _ } = *self;
+    }
+}
+
+impl Fold for MemConcrete {
+    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+        let MemConcrete { ref m, max } = *self;
+        // Contains no terms.
+        MemConcrete {
+            m: m.clone(),
+            max,
+        }
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemMap {
@@ -149,6 +193,26 @@ impl Memory for MemMap {
     }
 }
 
+impl Visit for MemMap {
+    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+        let MemMap { ref m, max: _ } = *self;
+        for &(ref t, _) in m.values() {
+            t.visit_with(f);
+        }
+    }
+}
+
+impl Fold for MemMap {
+    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+        let MemMap { ref m, max } = *self;
+        MemMap {
+            m: m.iter().map(|(&a, &(ref t, b))| (a, (t.fold_with(f), b))).collect(),
+            max,
+        }
+    }
+}
+
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemSnapshot {
     pub base: Addr,
@@ -164,6 +228,23 @@ impl Memory for MemSnapshot {
         todo!("MemSnapshot NYI")
     }
 }
+
+impl Visit for MemSnapshot {
+    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+        let MemSnapshot { base: _} = *self;
+    }
+}
+
+impl Fold for MemSnapshot {
+    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+        let MemSnapshot { base } = *self;
+        // Contains no terms.
+        MemSnapshot {
+            base,
+        }
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemLog {
@@ -188,6 +269,26 @@ impl Memory for MemLog {
         Err("MemLog load NYI".into())
     }
 }
+
+impl Visit for MemLog {
+    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+        let MemLog { ref l } = *self;
+        for &(ref addr, ref val, _) in l {
+            addr.visit_with(f);
+            val.visit_with(f);
+        }
+    }
+}
+
+impl Fold for MemLog {
+    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+        let MemLog { ref l } = *self;
+        MemLog {
+            l: l.iter().map(|&(ref a, ref v, w)| (a.fold_with(f), v.fold_with(f), w)).collect(),
+        }
+    }
+}
+
 
 /// Multiple disjoint regions of memory, each with a separate `MemState` representation.  Adding a
 /// new region is legal only if it's provably disjoint from all existing regions.
@@ -287,6 +388,37 @@ impl Memory for MemMulti {
                 "couldn't find a region containing address {}", debug_print(&addr))),
         };
         self.region(kind, i).load(w, offset, props)
+    }
+}
+
+impl Visit for MemMulti {
+    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+        let MemMulti { ref conc, ref objs, ref sym } = *self;
+        for &(_, _, ref m) in conc {
+            m.visit_with(f);
+        }
+        for &(v, _, ref m) in objs {
+            v.visit_with(f);
+            m.visit_with(f);
+        }
+        for &(ref a1, ref a2, ref m) in sym {
+            a1.visit_with(f);
+            a2.visit_with(f);
+            m.visit_with(f);
+        }
+    }
+}
+
+impl Fold for MemMulti {
+    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+        let MemMulti { ref conc, ref objs, ref sym } = *self;
+        MemMulti {
+            conc: conc.iter().map(|&(a1, a2, ref m)| (a1, a2, m.fold_with(f))).collect(),
+            objs: objs.iter().map(|&(v, n, ref m)| (v.fold_with(f), n, m.fold_with(f))).collect(),
+            sym: sym.iter().map(|&(ref a1, ref a2, ref m)| {
+                (a1.fold_with(f), a2.fold_with(f), m.fold_with(f))
+            }).collect(),
+        }
     }
 }
 
@@ -393,7 +525,7 @@ impl Visit for State {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
         let State { pc, ref regs, ref mem } = *self;
         regs.visit_with(f);
-        eprintln!("ADMITTED: Visit for MemState ({})", std::any::type_name::<F>());
+        mem.visit_with(f);
     }
 }
 
@@ -403,10 +535,7 @@ impl Fold for State {
         State {
             pc,
             regs: regs.fold_with(f),
-            mem: {
-                eprintln!("ADMITTED: Fold for MemState ({})", std::any::type_name::<F>());
-                mem.clone()
-            },
+            mem: mem.fold_with(f),
         }
     }
 }
