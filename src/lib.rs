@@ -50,14 +50,14 @@ impl BinOp {
                 debug_assert_eq!(mem::size_of::<Word>(), 8);
                 let xx = x as u128;
                 let yy = y as u128;
-                let zz = xx * yy;
+                let zz = (xx * yy) >> 64;
                 zz as u64
             },
             BinOp::Smulh => {
                 debug_assert_eq!(mem::size_of::<Word>(), 8);
                 let xx = x as i64 as i128;
                 let yy = y as i64 as i128;
-                let zz = xx * yy;
+                let zz = (xx * yy) >> 64;
                 zz as u64
             },
             BinOp::Udiv => {
