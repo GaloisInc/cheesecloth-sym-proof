@@ -72,7 +72,7 @@ fn run(path: &str) {
 		    } else {
 			// If the address hasn't been written to, we
 			// default to 0.  This can happen, for
-			// example, when RiscV want's to write a bite
+			// example, when RiscV want's to write a byte
 			// to a fresh address.  It will first read the
 			// word and modify the byte, preserving the
 			// rest of the word (possibly uninitialized)
