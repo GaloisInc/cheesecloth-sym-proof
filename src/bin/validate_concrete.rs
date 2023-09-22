@@ -74,7 +74,7 @@ fn run(path: &str) {
 			// default to 0.  This can happen, for
 			// example, when RiscV want's to write a bite
 			// to a fresh address.  It will first read the
-			// word and modify the bite, preserving the
+			// word and modify the byte, preserving the
 			// rest of the word (possibly uninitialized)
 			assert_eq!(value, 0, "at address {}, after cycle {} (default value)", addr, cycle);
 		    }
