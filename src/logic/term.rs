@@ -6,10 +6,10 @@ use crate::logic::print::Printer;
 
 /// An expression producing a value of type `Word`.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Term(TermInner);
+pub struct Term(TermKind);
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum TermInner {
+pub enum TermKind {
     Const(Word),
     Var(VarId),
     Not(Rc<Term>),
@@ -18,12 +18,12 @@ pub enum TermInner {
 }
 
 impl Term {
-    pub fn inner(&self) -> &TermInner {
+    pub fn kind(&self) -> &TermKind {
         &self.0
     }
 
     pub fn const_(x: Word) -> Term {
-        Term(TermInner::Const(x))
+        Term(TermKind::Const(x))
     }
 
     pub fn is_const(&self) -> bool {
@@ -32,14 +32,14 @@ impl Term {
 
     pub fn as_const(&self) -> Option<Word> {
         match self.0 {
-            TermInner::Const(x) => Some(x),
+            TermKind::Const(x) => Some(x),
             _ => None,
         }
     }
 
     pub fn as_const_or_err(&self) -> Result<Word, String> {
         match self.0 {
-            TermInner::Const(x) => Ok(x),
+            TermKind::Const(x) => Ok(x),
             ref t => Err(format!("expected const, but got {}", Printer::new(0).display(t))),
         }
     }
@@ -47,12 +47,12 @@ impl Term {
     /// Create a new `Var` with a specific `VarId`.  There are no checks to ensure that the `VarId`
     /// makes sense in context.  For generating fresh variables, use `VarCounter` instead.
     pub fn var_unchecked(v: VarId) -> Term {
-        Term(TermInner::Var(v))
+        Term(TermKind::Var(v))
     }
 
     pub fn as_var(&self) -> Option<VarId> {
         match self.0 {
-            TermInner::Var(v) => Some(v),
+            TermKind::Var(v) => Some(v),
             _ => None,
         }
     }
@@ -61,7 +61,7 @@ impl Term {
         if let Some(x) = t.as_const() {
             Term::const_(!x)
         } else {
-            Term(TermInner::Not(Rc::new(t)))
+            Term(TermKind::Not(Rc::new(t)))
         }
     }
 
@@ -82,7 +82,7 @@ impl Term {
                     if bc == 0 {
                         return a;
                     }
-                    if let TermInner::Binary(BinOp::Add, ref xy) = a.0 {
+                    if let TermKind::Binary(BinOp::Add, ref xy) = a.0 {
                         let (ref x, ref y) = **xy;
                         if let Some(yc) = y.as_const() {
                             return Term::add(x.clone(), Term::const_(bc.wrapping_add(yc)));
@@ -109,7 +109,7 @@ impl Term {
                     if bc == 0 {
                         return Term::const_(0);
                     }
-                    if let TermInner::Binary(BinOp::Add, ref xy) = a.0 {
+                    if let TermKind::Binary(BinOp::Add, ref xy) = a.0 {
                         let (ref x, ref y) = **xy;
                         if x.is_const() || y.is_const() {
                             return Term::add(
@@ -123,7 +123,7 @@ impl Term {
             _ => {},
         }
 
-        Term(TermInner::Binary(op, Rc::new((a, b))))
+        Term(TermKind::Binary(op, Rc::new((a, b))))
     }
 
     pub fn mux(c: Term, t: Term, e: Term) -> Term {
@@ -134,7 +134,7 @@ impl Term {
                 e
             }
         } else {
-            Term(TermInner::Mux(Rc::new((c, t, e))))
+            Term(TermKind::Mux(Rc::new((c, t, e))))
         }
     }
 
@@ -159,7 +159,7 @@ impl Term {
     /// Build the term `a + n`.  If `a` has the form `b + m` where `m` is a constant, this folds
     /// the two additions together into `b + (n + m)`.
     pub fn increment(a: Term, n: Word) -> Term {
-        if let TermInner::Binary(BinOp::Add, ref args) = a.0 {
+        if let TermKind::Binary(BinOp::Add, ref args) = a.0 {
             let (ref b, ref m) = **args;
             if let Some(m) = m.as_const() {
                 return Term::add(b.clone(), Term::const_(n + m));
@@ -171,14 +171,14 @@ impl Term {
     /* TODO: using a slice for `vars` doesn't work with multiple var scopes
     pub fn eval(&self, vars: &[Word]) -> Word {
         match self.0 {
-            TermInner::Var(v) => vars[v],
-            TermInner::Const(x) => x,
-            TermInner::Not(ref a) => !a.eval(vars),
-            TermInner::Binary(op, ref ab) => {
+            TermKind::Var(v) => vars[v],
+            TermKind::Const(x) => x,
+            TermKind::Not(ref a) => !a.eval(vars),
+            TermKind::Binary(op, ref ab) => {
                 let (ref a, ref b) = **ab;
                 op.eval(a.eval(vars), b.eval(vars))
             },
-            TermInner::Mux(ref cte) => {
+            TermKind::Mux(ref cte) => {
                 let (ref c, ref t, ref e) = **cte;
                 if c.eval(vars) != 0 {
                     t.eval(vars)
@@ -192,8 +192,8 @@ impl Term {
 
     pub fn as_var_plus_const(&self) -> Option<(VarId, Word)> {
         match self.0 {
-            TermInner::Var(v) => Some((v, 0)),
-            TermInner::Binary(BinOp::Add, ref xy) => {
+            TermKind::Var(v) => Some((v, 0)),
+            TermKind::Binary(BinOp::Add, ref xy) => {
                 let v = xy.0.as_var()?;
                 let c = xy.1.as_const()?;
                 Some((v, c))
@@ -207,19 +207,19 @@ impl Term {
     /// be `Some(x)`.
     pub fn for_each_var<T>(&self, f: &mut impl FnMut(VarId) -> Option<T>) -> Option<T> {
         match self.0 {
-            TermInner::Const(_) => None,
-            TermInner::Var(v) => {
+            TermKind::Const(_) => None,
+            TermKind::Var(v) => {
                 f(v)
             },
-            TermInner::Not(ref t) => {
+            TermKind::Not(ref t) => {
                 t.for_each_var(f)
             },
-            TermInner::Binary(_, ref ts) => {
+            TermKind::Binary(_, ref ts) => {
                 let (ref t1, ref t2) = **ts;
                 t1.for_each_var(f)
                     .or_else(|| t2.for_each_var(f))
             },
-            TermInner::Mux(ref ts) => {
+            TermKind::Mux(ref ts) => {
                 let (ref t1, ref t2, ref t3) = **ts;
                 t1.for_each_var(f)
                     .or_else(|| t2.for_each_var(f))

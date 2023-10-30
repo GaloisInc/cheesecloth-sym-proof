@@ -1,4 +1,4 @@
-use super::{VarId, Term, TermInner, Prop, StepProp, ReachableProp, StatePred, Binder};
+use super::{VarId, Term, TermKind, Prop, StepProp, ReachableProp, StatePred, Binder};
 
 
 pub trait Visitor {
@@ -17,16 +17,16 @@ pub fn default_visit_var_id<F: Visitor + ?Sized>(_f: &mut F, _x: VarId) {
 }
 
 pub fn default_visit_term<F: Visitor + ?Sized>(f: &mut F, x: &Term) {
-    match *x.inner() {
-        TermInner::Const(_x) => {},
-        TermInner::Var(v) => v.visit_with(f),
-        TermInner::Not(ref t) => t.visit_with(f),
-        TermInner::Binary(_op, ref ts) => {
+    match *x.kind() {
+        TermKind::Const(_x) => {},
+        TermKind::Var(v) => v.visit_with(f),
+        TermKind::Not(ref t) => t.visit_with(f),
+        TermKind::Binary(_op, ref ts) => {
             let (ref a, ref b) = **ts;
             a.visit_with(f);
             b.visit_with(f);
         },
-        TermInner::Mux(ref ts) => {
+        TermKind::Mux(ref ts) => {
             let (ref a, ref b, ref c) = **ts;
             a.visit_with(f);
             b.visit_with(f);

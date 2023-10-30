@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::rc::Rc;
 use crate::BinOp;
-use super::{VarId, Term, TermInner, Prop, StepProp, ReachableProp, StatePred, Binder, VarCounter};
+use super::{VarId, Term, TermKind, Prop, StepProp, ReachableProp, StatePred, Binder, VarCounter};
 
 
 
@@ -97,17 +97,17 @@ impl Print for VarId {
 
 impl Print for Term {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
-        self.inner().print(p, f)
+        self.kind().print(p, f)
     }
 }
 
-impl Print for TermInner {
+impl Print for TermKind {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            TermInner::Const(x) => write!(f, "{}", x as i64),
-            TermInner::Var(v) => v.print(p, f),
-            TermInner::Not(ref t) => write!(f, "!{}", p.display(t)),
-            TermInner::Binary(op, ref xy) => {
+            TermKind::Const(x) => write!(f, "{}", x as i64),
+            TermKind::Var(v) => v.print(p, f),
+            TermKind::Not(ref t) => write!(f, "!{}", p.display(t)),
+            TermKind::Binary(op, ref xy) => {
                 let (ref x, ref y) = **xy;
                 let x = p.display(x);
                 let y = p.display(y);
@@ -131,7 +131,7 @@ impl Print for TermInner {
                     BinOp::Cmpge => write!(f, "({} >=s {})", x, y),
                 }
             },
-            TermInner::Mux(ref cte) => {
+            TermKind::Mux(ref cte) => {
                 let (ref c, ref t, ref e) = **cte;
                 let c = p.display(c);
                 let t = p.display(t);

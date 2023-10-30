@@ -1,5 +1,5 @@
 use std::array;
-use super::{VarId, Term, TermInner, Prop, StepProp, ReachableProp, StatePred, Binder};
+use super::{VarId, Term, TermKind, Prop, StepProp, ReachableProp, StatePred, Binder};
 
 
 pub trait Folder {
@@ -19,15 +19,15 @@ pub fn default_fold_var_id<F: Folder + ?Sized>(_f: &mut F, x: VarId) -> VarId {
 }
 
 pub fn default_fold_term<F: Folder + ?Sized>(f: &mut F, x: &Term) -> Term {
-    match *x.inner() {
-        TermInner::Const(x) => Term::const_(x),
-        TermInner::Var(v) => Term::var_unchecked(v.fold_with(f)),
-        TermInner::Not(ref t) => Term::not(t.fold_with(f)),
-        TermInner::Binary(op, ref ts) => {
+    match *x.kind() {
+        TermKind::Const(x) => Term::const_(x),
+        TermKind::Var(v) => Term::var_unchecked(v.fold_with(f)),
+        TermKind::Not(ref t) => Term::not(t.fold_with(f)),
+        TermKind::Binary(op, ref ts) => {
             let (ref a, ref b) = **ts;
             Term::binary(op, a.fold_with(f), b.fold_with(f))
         },
-        TermInner::Mux(ref ts) => {
+        TermKind::Mux(ref ts) => {
             let (ref a, ref b, ref c) = **ts;
             Term::mux(a.fold_with(f), b.fold_with(f), c.fold_with(f))
         },

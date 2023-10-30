@@ -13,7 +13,7 @@ pub mod term;
 pub mod visit;
 pub mod wf;
 
-pub use self::term::{Term, TermInner};
+pub use self::term::{Term, TermKind};
 
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
