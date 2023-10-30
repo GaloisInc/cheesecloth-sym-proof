@@ -163,9 +163,9 @@ impl Term {
                     if bc == 0 {
                         return a;
                     }
-                    if let TermKind::Binary(BinOp::Add, ref x, ref y) = a.0 {
+                    if let TermKind::Binary(BinOp::Add, x, y) = *a.kind() {
                         if let Some(yc) = y.as_const() {
-                            return Term::add(x.clone(), Term::const_(bc.wrapping_add(yc)));
+                            return Term::add(x, Term::const_(bc.wrapping_add(yc)));
                         }
                     }
                 }
@@ -189,11 +189,11 @@ impl Term {
                     if bc == 0 {
                         return Term::const_(0);
                     }
-                    if let TermKind::Binary(BinOp::Add, ref x, ref y) = a.0 {
+                    if let TermKind::Binary(BinOp::Add, x, y) = *a.kind() {
                         if x.is_const() || y.is_const() {
                             return Term::add(
-                                Term::mull(x.clone(), b.clone()),
-                                Term::mull(y.clone(), b.clone()),
+                                Term::mull(x, b),
+                                Term::mull(y, b),
                             );
                         }
                     }
@@ -238,40 +238,18 @@ impl Term {
     /// Build the term `a + n`.  If `a` has the form `b + m` where `m` is a constant, this folds
     /// the two additions together into `b + (n + m)`.
     pub fn increment(a: Term, n: Word) -> Term {
-        if let TermKind::Binary(BinOp::Add, ref b, ref m) = a.0 {
+        if let TermKind::Binary(BinOp::Add, b, m) = *a.kind() {
             if let Some(m) = m.as_const() {
-                return Term::add(b.clone(), Term::const_(n + m));
+                return Term::add(b, Term::const_(n + m));
             }
         }
         Term::add(a, Term::const_(n))
     }
 
-    /* TODO: using a slice for `vars` doesn't work with multiple var scopes
-    pub fn eval(&self, vars: &[Word]) -> Word {
-        match *self.kind() {
-            TermKind::Var(v) => vars[v],
-            TermKind::Const(x) => x,
-            TermKind::Not(ref a) => !a.eval(vars),
-            TermKind::Binary(op, ref ab) => {
-                let (ref a, ref b) = **ab;
-                op.eval(a.eval(vars), b.eval(vars))
-            },
-            TermKind::Mux(ref cte) => {
-                let (ref c, ref t, ref e) = **cte;
-                if c.eval(vars) != 0 {
-                    t.eval(vars)
-                } else {
-                    e.eval(vars)
-                }
-            },
-        }
-    }
-    */
-
     pub fn as_var_plus_const(&self) -> Option<(VarId, Word)> {
         match *self.kind() {
             TermKind::Var(v) => Some((v, 0)),
-            TermKind::Binary(BinOp::Add, ref x, ref y) => {
+            TermKind::Binary(BinOp::Add, x, y) => {
                 let v = x.as_var()?;
                 let c = y.as_const()?;
                 Some((v, c))
@@ -289,14 +267,14 @@ impl Term {
             TermKind::Var(v) => {
                 f(v)
             },
-            TermKind::Not(ref t) => {
+            TermKind::Not(t) => {
                 t.for_each_var(f)
             },
-            TermKind::Binary(_, ref t1, ref t2) => {
+            TermKind::Binary(_, t1, t2) => {
                 t1.for_each_var(f)
                     .or_else(|| t2.for_each_var(f))
             },
-            TermKind::Mux(ref t1, ref t2, ref t3) => {
+            TermKind::Mux(t1, t2, t3) => {
                 t1.for_each_var(f)
                     .or_else(|| t2.for_each_var(f))
                     .or_else(|| t3.for_each_var(f))

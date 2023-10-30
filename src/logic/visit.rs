@@ -20,12 +20,12 @@ pub fn default_visit_term<F: Visitor + ?Sized>(f: &mut F, x: &Term) {
     match *x.kind() {
         TermKind::Const(_x) => {},
         TermKind::Var(v) => v.visit_with(f),
-        TermKind::Not(ref t) => t.visit_with(f),
-        TermKind::Binary(_op, ref a, ref b) => {
+        TermKind::Not(t) => t.visit_with(f),
+        TermKind::Binary(_op, a, b) => {
             a.visit_with(f);
             b.visit_with(f);
         },
-        TermKind::Mux(ref a, ref b, ref c) => {
+        TermKind::Mux(a, b, c) => {
             a.visit_with(f);
             b.visit_with(f);
             c.visit_with(f);
@@ -61,7 +61,7 @@ impl Visit for Term {
 impl Visit for Prop {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
         match *self {
-            Prop::Nonzero(ref t) => t.visit_with(f),
+            Prop::Nonzero(t) => t.visit_with(f),
             Prop::Forall(ref b) => {
                 f.visit_binder(b, |f, x| {
                     let (ref ps, ref q) = *x;
@@ -77,7 +77,7 @@ impl Visit for Prop {
 
 impl Visit for StepProp {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
-        let StepProp { ref pre, ref post, ref min_cycles } = *self;
+        let StepProp { ref pre, ref post, min_cycles } = *self;
         f.visit_binder(pre, |f, sp| sp.visit_with(f));
         f.visit_binder(post, |f, sp| sp.visit_with(f));
         min_cycles.visit_with(f);
@@ -86,7 +86,7 @@ impl Visit for StepProp {
 
 impl Visit for ReachableProp {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
-        let ReachableProp { ref pred, ref min_cycles } = *self;
+        let ReachableProp { ref pred, min_cycles } = *self;
         f.visit_binder(pred, |f, sp| sp.visit_with(f));
         min_cycles.visit_with(f);
     }

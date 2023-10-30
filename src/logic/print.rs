@@ -106,10 +106,10 @@ impl Print for TermKind {
         match *self {
             TermKind::Const(x) => write!(f, "{}", x as i64),
             TermKind::Var(v) => v.print(p, f),
-            TermKind::Not(ref t) => write!(f, "!{}", p.display(t)),
-            TermKind::Binary(op, ref x, ref y) => {
-                let x = p.display(x);
-                let y = p.display(y);
+            TermKind::Not(t) => write!(f, "!{}", p.display(&t)),
+            TermKind::Binary(op, x, y) => {
+                let x = p.display(&x);
+                let y = p.display(&y);
                 match op {
                     BinOp::And => write!(f, "({} & {})", x, y),
                     BinOp::Or => write!(f, "({} | {})", x, y),
@@ -130,10 +130,10 @@ impl Print for TermKind {
                     BinOp::Cmpge => write!(f, "({} >=s {})", x, y),
                 }
             },
-            TermKind::Mux(ref c, ref t, ref e) => {
-                let c = p.display(c);
-                let t = p.display(t);
-                let e = p.display(e);
+            TermKind::Mux(c, t, e) => {
+                let c = p.display(&c);
+                let t = p.display(&t);
+                let e = p.display(&e);
                 write!(f, "mux({}, {}, {})", c, t, e)
             },
         }
@@ -143,7 +143,7 @@ impl Print for TermKind {
 impl Print for Prop {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Prop::Nonzero(ref t) => t.print(p, f),
+            Prop::Nonzero(t) => t.print(p, f),
 
             Prop::Forall(ref b) => {
                 print_binder(p, f, BinderMode::Forall, &b.vars)?;
@@ -205,11 +205,11 @@ fn print_binder(
 
 impl Print for StepProp {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
-        let StepProp { ref pre, ref post, ref min_cycles } = *self;
+        let StepProp { ref pre, ref post, min_cycles } = *self;
         write!(
             f, "{{{}}} ->({}) {{{}}}",
             p.display(&PrintBinder(BinderMode::Exists, pre)),
-            p.display(min_cycles),
+            p.display(&min_cycles),
             p.display(&PrintBinder(BinderMode::Exists, post)),
         )
     }
@@ -217,10 +217,10 @@ impl Print for StepProp {
 
 impl Print for ReachableProp {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
-        let ReachableProp { ref pred, ref min_cycles } = *self;
+        let ReachableProp { ref pred, min_cycles } = *self;
         write!(
             f, "{{init}} ->({}) {{{}}}",
-            p.display(min_cycles),
+            p.display(&min_cycles),
             p.display(&PrintBinder(BinderMode::Exists, pred)),
         )
     }
