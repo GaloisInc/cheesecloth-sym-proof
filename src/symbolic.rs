@@ -1,10 +1,7 @@
-use std::array;
 use std::collections::HashMap;
-use std::fmt;
-use std::rc::Rc;
-use crate::{Word, WORD_BYTES, Addr, BinOp};
+use crate::{Word, WORD_BYTES, Addr};
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand};
-use crate::logic::{Term, VarId, Subst, Prop};
+use crate::logic::{Term, VarId, Prop};
 use crate::logic::fold::{Fold, Folder};
 use crate::logic::print::debug_print;
 use crate::logic::visit::{Visit, Visitor};
@@ -101,13 +98,13 @@ impl Memory for MemConcrete {
 }
 
 impl Visit for MemConcrete {
-    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+    fn visit_with<F: Visitor + ?Sized>(&self, _f: &mut F) {
         let MemConcrete { m: _, max: _ } = *self;
     }
 }
 
 impl Fold for MemConcrete {
-    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+    fn fold_with<F: Folder + ?Sized>(&self, _f: &mut F) -> Self {
         let MemConcrete { ref m, max } = *self;
         // Contains no terms.
         MemConcrete {
@@ -230,13 +227,13 @@ impl Memory for MemSnapshot {
 }
 
 impl Visit for MemSnapshot {
-    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+    fn visit_with<F: Visitor + ?Sized>(&self, _f: &mut F) {
         let MemSnapshot { base: _} = *self;
     }
 }
 
 impl Fold for MemSnapshot {
-    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+    fn fold_with<F: Folder + ?Sized>(&self, _f: &mut F) -> Self {
         let MemSnapshot { base } = *self;
         // Contains no terms.
         MemSnapshot {
@@ -363,7 +360,7 @@ impl MemMulti {
         for (start, end, kind, i) in region_iter {
             let lo = Prop::Nonzero(Term::cmpae(addr.clone(), start.clone()));
             let hi = Prop::Nonzero(Term::cmpa(end, addr.clone()));
-            if props.contains(&lo) && props.contains(&lo) {
+            if props.contains(&lo) && props.contains(&hi) {
                 return Some((Term::sub(addr, start), kind, i));
             }
         }
@@ -523,7 +520,7 @@ impl State {
 
 impl Visit for State {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
-        let State { pc, ref regs, ref mem } = *self;
+        let State { pc: _, ref regs, ref mem } = *self;
         regs.visit_with(f);
         mem.visit_with(f);
     }

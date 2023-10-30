@@ -1,18 +1,14 @@
 use std::collections::HashMap;
 use std::iter;
 use std::mem;
-use std::ops::Deref;
-use crate::{Word, Addr};
-use crate::logic::{
-    Term, VarId, VarCounter, Binder, Prop, StepProp, ReachableProp, StatePred, Subst, SubstTable,
-    IdentitySubsts,
-};
-use crate::logic::print::{Print, Printer, DisplayWithPrinter, debug_print, PrintBinder};
+use crate::Addr;
+use crate::logic::{Term, VarId, VarCounter, Binder, Prop, StepProp, ReachableProp, StatePred};
+use crate::logic::print::{Print, Printer, DisplayWithPrinter, PrintBinder};
 use crate::logic::shift::ShiftExt;
 use crate::logic::subst::SubstExt;
 use crate::logic::wf::WfExt;
-use crate::symbolic::{self, Memory, MemState, MemLog};
-use crate::micro_ram::{self, Instr, Opcode, Reg, Operand, MemWidth};
+use crate::symbolic::{Memory, MemState, MemLog};
+use crate::micro_ram::{Instr, Opcode, Reg, Operand, MemWidth};
 
 
 
@@ -522,6 +518,7 @@ impl<'a> StepProof<'a> {
     }
 
     fn mem_load(&self, w: MemWidth, addr: Term) -> Result<Term, String> {
+        let _ = (w, addr);
         Err("StepProof::mem_load not yet implemented".into())
     }
 

@@ -10,14 +10,11 @@
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
 use std::array;
-use std::collections::HashMap;
 use std::env;
 use env_logger;
 use log::trace;
-use sym_proof::Word;
-use sym_proof::logic::{Term, Prop, Binder, VarCounter, StepProp, StatePred, VarId, SubstTable};
+use sym_proof::logic::{Term, Prop, Binder, VarCounter, StepProp, StatePred, VarId};
 use sym_proof::logic::shift::ShiftExt;
-use sym_proof::micro_ram::NUM_REGS;
 use sym_proof::micro_ram::import;
 use sym_proof::proof::Proof;
 use sym_proof::symbolic::{self, MemState, MemLog};
@@ -58,7 +55,7 @@ fn run(path: &str) -> Result<(), String> {
     }
 
 
-    let lemmas = Proof::prove(&prog, |pf| {
+    let _lemmas = Proof::prove(&prog, |pf| {
         // ----------------------------------------
         // Prove a single iteration
         // ----------------------------------------
@@ -238,7 +235,7 @@ fn run(path: &str) -> Result<(), String> {
                         32 => Term::var_unchecked(VarId::new(0, 38)),
                         _ => Term::var_unchecked(VarId::new(0, i as _)),
                     });
-                    let l_n_plus_one_iters = pf.rule_step_seq(l_next_iter, l_n_iters, &witness)?;
+                    let _l_n_plus_one_iters = pf.rule_step_seq(l_next_iter, l_n_iters, &witness)?;
 
                     Ok(())
                 })?;
@@ -247,7 +244,7 @@ fn run(path: &str) -> Result<(), String> {
         )?;
 
         eprintln!("\napply induction with {l_zero}, {l_succ}");
-        let l_iters = pf.rule_induction(l_zero, l_succ)?;
+        let _l_iters = pf.rule_induction(l_zero, l_succ)?;
 
         eprintln!("\nfinal context:");
         pf.show_context();

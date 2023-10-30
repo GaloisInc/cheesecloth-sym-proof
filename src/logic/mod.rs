@@ -1,14 +1,10 @@
-use std::array;
-use std::collections::{HashMap, HashSet};
-use std::fmt;
 use std::ops::Deref;
 use std::rc::Rc;
-use crate::{Word, WORD_BYTES, Addr, BinOp};
+use crate::{Word, BinOp};
 use crate::logic::fold::Fold;
 use crate::logic::print::Printer;
 use crate::logic::shift::ShiftExt;
 use crate::logic::subst::SubstExt;
-use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand};
 use crate::symbolic;
 
 
@@ -321,7 +317,7 @@ impl Term {
     /// Apply `f` to each `VarId` mentioned in `self`.  `f` should return `None` to keep traversing
     /// or `Some(x)` to break out; in the latter case, the return value of `for_each_var` will also
     /// be `Some(x)`.
-    pub fn for_each_var<T>(&self, mut f: &mut impl FnMut(VarId) -> Option<T>) -> Option<T> {
+    pub fn for_each_var<T>(&self, f: &mut impl FnMut(VarId) -> Option<T>) -> Option<T> {
         match self.0 {
             TermInner::Const(_) => None,
             TermInner::Var(v) => {
@@ -470,7 +466,7 @@ impl Prop {
         Prop::implies(vec![premise], conclusion)
     }
 
-    pub fn for_each_var<T>(&self, mut f: &mut impl FnMut(VarId) -> Option<T>) -> Option<T> {
+    pub fn for_each_var<T>(&self, f: &mut impl FnMut(VarId) -> Option<T>) -> Option<T> {
         match *self {
             Prop::Nonzero(ref t) => t.for_each_var(f),
             Prop::Forall(ref b) => {
