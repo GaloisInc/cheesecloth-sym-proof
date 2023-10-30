@@ -23,12 +23,10 @@ pub fn default_fold_term<F: Folder + ?Sized>(f: &mut F, x: &Term) -> Term {
         TermKind::Const(x) => Term::const_(x),
         TermKind::Var(v) => Term::var_unchecked(v.fold_with(f)),
         TermKind::Not(ref t) => Term::not(t.fold_with(f)),
-        TermKind::Binary(op, ref ts) => {
-            let (ref a, ref b) = **ts;
+        TermKind::Binary(op, ref a, ref b) => {
             Term::binary(op, a.fold_with(f), b.fold_with(f))
         },
-        TermKind::Mux(ref ts) => {
-            let (ref a, ref b, ref c) = **ts;
+        TermKind::Mux(ref a, ref b, ref c) => {
             Term::mux(a.fold_with(f), b.fold_with(f), c.fold_with(f))
         },
     }

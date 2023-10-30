@@ -1,29 +1,110 @@
-use std::rc::Rc;
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
+use std::mem::{self, ManuallyDrop};
+use bumpalo::Bump;
 use crate::{Word, BinOp};
 use crate::logic::VarId;
 use crate::logic::print::Printer;
 
 
-/// An expression producing a value of type `Word`.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Term(TermKind);
+#[derive(Default)]
+struct Interner {
+    storage: ManuallyDrop<Bump>,
+    hash: ManuallyDrop<HashSet<&'static TermKind>>,
+}
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+impl Drop for Interner {
+    fn drop(&mut self) {
+        unsafe {
+            // Drop `hash` first to avoid dangling references into `storage`.
+            ManuallyDrop::drop(&mut self.hash);
+            // Dropping `storage` doesn't run `Drop` on the values inside, so nothing will observe
+            // the dangling internal references as the arena deallocates each of its chunks.
+            ManuallyDrop::drop(&mut self.storage);
+        }
+    }
+}
+
+thread_local! {
+    static INTERNER: RefCell<Interner> = RefCell::new(Interner::default());
+}
+
+
+/// An expression producing a value of type `Word`.
+#[derive(Copy, Clone, Debug)]
+pub struct Term(
+    &'static TermKind,
+    /// Make this type `!Send` and `!Sync`, so one thread can't obtain a `Term` allocated in
+    /// a different thread's interner.
+    PhantomData<*mut u8>,
+);
+
+impl PartialEq for Term {
+    fn eq(&self, other: &Term) -> bool {
+        self.0 as *const TermKind == other.0 as *const TermKind
+    }
+
+    fn ne(&self, other: &Term) -> bool {
+        self.0 as *const TermKind != other.0 as *const TermKind
+    }
+}
+
+impl Eq for Term {}
+
+impl Hash for Term {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.0 as *const TermKind).hash(state)
+    }
+}
+
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum TermKind {
     Const(Word),
     Var(VarId),
-    Not(Rc<Term>),
-    Binary(BinOp, Rc<(Term, Term)>),
-    Mux(Rc<(Term, Term, Term)>),
+    Not(Term),
+    Binary(BinOp, Term, Term),
+    Mux(Term, Term, Term),
 }
 
+
 impl Term {
+    pub fn intern(kind: TermKind) -> Term {
+        INTERNER.with(|interner| {
+            let mut interner = interner.borrow_mut();
+            match interner.hash.get(&kind) {
+                Some(x) => Term(x, PhantomData),
+                None => {
+                    let alloc = interner.storage.alloc(kind);
+                    let alloc = unsafe {
+                        // Extend the lifetime to `'static`.  The allocation is in a thread-local,
+                        // so it will remain live until the end of the current thread.  `Term` is
+                        // also `!Send`, so the reference won't outlive the current thread.
+                        //
+                        // However, this is still UNSOUND if `Term`s are stored into other
+                        // `thread_local!` variables.  The order in which different `thread_local`s
+                        // are dropped is not specified, so it's possible that the interner is
+                        // dropped, then another `thread_local` is dropped, and the second
+                        // `thread_local` observes the now-dangling `Term`s.  We work around this
+                        // by not having any other `thread_local`s that could inspect `Term`s in
+                        // their destructors.
+                        mem::transmute::<&TermKind, &'static TermKind>(alloc)
+                    };
+                    interner.hash.insert(alloc);
+                    Term(alloc, PhantomData)
+                },
+            }
+        })
+    }
+
     pub fn kind(&self) -> &TermKind {
-        &self.0
+        self.0
     }
 
     pub fn const_(x: Word) -> Term {
-        Term(TermKind::Const(x))
+        Term::intern(TermKind::Const(x))
     }
 
     pub fn is_const(&self) -> bool {
@@ -31,14 +112,14 @@ impl Term {
     }
 
     pub fn as_const(&self) -> Option<Word> {
-        match self.0 {
+        match *self.kind() {
             TermKind::Const(x) => Some(x),
             _ => None,
         }
     }
 
     pub fn as_const_or_err(&self) -> Result<Word, String> {
-        match self.0 {
+        match *self.kind() {
             TermKind::Const(x) => Ok(x),
             ref t => Err(format!("expected const, but got {}", Printer::new(0).display(t))),
         }
@@ -47,11 +128,11 @@ impl Term {
     /// Create a new `Var` with a specific `VarId`.  There are no checks to ensure that the `VarId`
     /// makes sense in context.  For generating fresh variables, use `VarCounter` instead.
     pub fn var_unchecked(v: VarId) -> Term {
-        Term(TermKind::Var(v))
+        Term::intern(TermKind::Var(v))
     }
 
     pub fn as_var(&self) -> Option<VarId> {
-        match self.0 {
+        match *self.kind() {
             TermKind::Var(v) => Some(v),
             _ => None,
         }
@@ -61,7 +142,7 @@ impl Term {
         if let Some(x) = t.as_const() {
             Term::const_(!x)
         } else {
-            Term(TermKind::Not(Rc::new(t)))
+            Term::intern(TermKind::Not(t))
         }
     }
 
@@ -82,8 +163,7 @@ impl Term {
                     if bc == 0 {
                         return a;
                     }
-                    if let TermKind::Binary(BinOp::Add, ref xy) = a.0 {
-                        let (ref x, ref y) = **xy;
+                    if let TermKind::Binary(BinOp::Add, ref x, ref y) = a.0 {
                         if let Some(yc) = y.as_const() {
                             return Term::add(x.clone(), Term::const_(bc.wrapping_add(yc)));
                         }
@@ -109,8 +189,7 @@ impl Term {
                     if bc == 0 {
                         return Term::const_(0);
                     }
-                    if let TermKind::Binary(BinOp::Add, ref xy) = a.0 {
-                        let (ref x, ref y) = **xy;
+                    if let TermKind::Binary(BinOp::Add, ref x, ref y) = a.0 {
                         if x.is_const() || y.is_const() {
                             return Term::add(
                                 Term::mull(x.clone(), b.clone()),
@@ -123,7 +202,7 @@ impl Term {
             _ => {},
         }
 
-        Term(TermKind::Binary(op, Rc::new((a, b))))
+        Term::intern(TermKind::Binary(op, a, b))
     }
 
     pub fn mux(c: Term, t: Term, e: Term) -> Term {
@@ -134,7 +213,7 @@ impl Term {
                 e
             }
         } else {
-            Term(TermKind::Mux(Rc::new((c, t, e))))
+            Term::intern(TermKind::Mux(c, t, e))
         }
     }
 
@@ -159,8 +238,7 @@ impl Term {
     /// Build the term `a + n`.  If `a` has the form `b + m` where `m` is a constant, this folds
     /// the two additions together into `b + (n + m)`.
     pub fn increment(a: Term, n: Word) -> Term {
-        if let TermKind::Binary(BinOp::Add, ref args) = a.0 {
-            let (ref b, ref m) = **args;
+        if let TermKind::Binary(BinOp::Add, ref b, ref m) = a.0 {
             if let Some(m) = m.as_const() {
                 return Term::add(b.clone(), Term::const_(n + m));
             }
@@ -170,7 +248,7 @@ impl Term {
 
     /* TODO: using a slice for `vars` doesn't work with multiple var scopes
     pub fn eval(&self, vars: &[Word]) -> Word {
-        match self.0 {
+        match *self.kind() {
             TermKind::Var(v) => vars[v],
             TermKind::Const(x) => x,
             TermKind::Not(ref a) => !a.eval(vars),
@@ -191,11 +269,11 @@ impl Term {
     */
 
     pub fn as_var_plus_const(&self) -> Option<(VarId, Word)> {
-        match self.0 {
+        match *self.kind() {
             TermKind::Var(v) => Some((v, 0)),
-            TermKind::Binary(BinOp::Add, ref xy) => {
-                let v = xy.0.as_var()?;
-                let c = xy.1.as_const()?;
+            TermKind::Binary(BinOp::Add, ref x, ref y) => {
+                let v = x.as_var()?;
+                let c = y.as_const()?;
                 Some((v, c))
             },
             _ => None,
@@ -206,7 +284,7 @@ impl Term {
     /// or `Some(x)` to break out; in the latter case, the return value of `for_each_var` will also
     /// be `Some(x)`.
     pub fn for_each_var<T>(&self, f: &mut impl FnMut(VarId) -> Option<T>) -> Option<T> {
-        match self.0 {
+        match *self.kind() {
             TermKind::Const(_) => None,
             TermKind::Var(v) => {
                 f(v)
@@ -214,13 +292,11 @@ impl Term {
             TermKind::Not(ref t) => {
                 t.for_each_var(f)
             },
-            TermKind::Binary(_, ref ts) => {
-                let (ref t1, ref t2) = **ts;
+            TermKind::Binary(_, ref t1, ref t2) => {
                 t1.for_each_var(f)
                     .or_else(|| t2.for_each_var(f))
             },
-            TermKind::Mux(ref ts) => {
-                let (ref t1, ref t2, ref t3) = **ts;
+            TermKind::Mux(ref t1, ref t2, ref t3) => {
                 t1.for_each_var(f)
                     .or_else(|| t2.for_each_var(f))
                     .or_else(|| t3.for_each_var(f))

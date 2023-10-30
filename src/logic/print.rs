@@ -107,8 +107,7 @@ impl Print for TermKind {
             TermKind::Const(x) => write!(f, "{}", x as i64),
             TermKind::Var(v) => v.print(p, f),
             TermKind::Not(ref t) => write!(f, "!{}", p.display(t)),
-            TermKind::Binary(op, ref xy) => {
-                let (ref x, ref y) = **xy;
+            TermKind::Binary(op, ref x, ref y) => {
                 let x = p.display(x);
                 let y = p.display(y);
                 match op {
@@ -131,8 +130,7 @@ impl Print for TermKind {
                     BinOp::Cmpge => write!(f, "({} >=s {})", x, y),
                 }
             },
-            TermKind::Mux(ref cte) => {
-                let (ref c, ref t, ref e) = **cte;
+            TermKind::Mux(ref c, ref t, ref e) => {
                 let c = p.display(c);
                 let t = p.display(t);
                 let e = p.display(e);

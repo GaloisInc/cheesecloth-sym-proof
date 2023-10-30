@@ -21,13 +21,11 @@ pub fn default_visit_term<F: Visitor + ?Sized>(f: &mut F, x: &Term) {
         TermKind::Const(_x) => {},
         TermKind::Var(v) => v.visit_with(f),
         TermKind::Not(ref t) => t.visit_with(f),
-        TermKind::Binary(_op, ref ts) => {
-            let (ref a, ref b) = **ts;
+        TermKind::Binary(_op, ref a, ref b) => {
             a.visit_with(f);
             b.visit_with(f);
         },
-        TermKind::Mux(ref ts) => {
-            let (ref a, ref b, ref c) = **ts;
+        TermKind::Mux(ref a, ref b, ref c) => {
             a.visit_with(f);
             b.visit_with(f);
             c.visit_with(f);
