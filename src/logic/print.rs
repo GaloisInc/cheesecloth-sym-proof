@@ -97,7 +97,7 @@ impl Print for VarId {
 
 impl Print for Term {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.print(p, f)
+        self.inner().print(p, f)
     }
 }
 
