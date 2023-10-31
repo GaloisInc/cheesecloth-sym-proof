@@ -151,7 +151,7 @@ impl Print for Prop {
                 p.enter_binder(|p| {
                     let (ref premises, ref conclusion) = b.inner;
 
-                    for prop in premises {
+                    for prop in premises.iter() {
                         write!(f, "({}) -> ", p.display(prop))?;
                     }
                     conclusion.print(p, f)
@@ -231,7 +231,7 @@ impl Print for StatePred {
         write!(f, "pc = {}", self.state.pc)?;
 
         let mut vars_mentioned_in_props = HashSet::new();
-        for p in &self.props {
+        for p in self.props.iter() {
             p.for_each_var(&mut |v| -> Option<()> {
                 vars_mentioned_in_props.insert(v);
                 None
@@ -248,7 +248,7 @@ impl Print for StatePred {
             write!(f, " /\\ r{} = {}", i, p.display(t))?;
         }
 
-        for prop in &self.props {
+        for prop in self.props.iter() {
             write!(f, " /\\ {}", p.display(prop))?;
         }
 

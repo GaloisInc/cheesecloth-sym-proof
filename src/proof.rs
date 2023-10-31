@@ -234,7 +234,7 @@ impl<'a> Proof<'a> {
             _ => return Err(format!("rule_apply: expected forall, but got {}", self.print(prop))),
         };
 
-        let premises = binder.map(|&(ref ps, _)| ps);
+        let premises = binder.map(|&(ref ps, _)| &**ps);
         let conclusion = binder.map(|&(_, ref q)| &**q);
         for premise in premises.iter() {
             self.require_premise(&premise.subst_ref(args))?;
@@ -267,7 +267,7 @@ impl<'a> Proof<'a> {
             // TODO: what happens if the closure fails to shift and introduces an out-of-range
             // variable for this binder?  failure at application time?
             let (mut props, extra) = mk_premises(vars);
-            let premises = props.clone();
+            let premises = props.clone().into_boxed_slice();
             let inner_depth = self.outer_scopes.len() + 1;
             for (i, p) in premises.iter().enumerate() {
                 eprintln!("introduced {}.{}: {}", inner_depth, i, self.print_adj(1, p));
@@ -473,7 +473,7 @@ impl<'a> Proof<'a> {
         Ok(self.add_prop(Prop::Forall(Binder::new(|vars| {
             // We don't shift `predicate` because we already skipped a binder to get it.
             assert_eq!(vars.fresh_var(), VarId::new(0, 0));
-            (Vec::new(), Box::new(predicate.inner.clone()))
+            (Box::new([]) as _, Box::new(predicate.inner.clone()))
         }))))
     }
 

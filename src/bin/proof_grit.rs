@@ -105,7 +105,7 @@ fn run(path: &str) -> Result<(), String> {
                             // nothing is known about memory.
                             mem: MemState::Log(MemLog::new()),
                         },
-                        props: vec![],
+                        props: vec![].into(),
                     }
                 });
 
@@ -148,7 +148,7 @@ fn run(path: &str) -> Result<(), String> {
                     }),
                     mem: MemState::Log(MemLog { l: Vec::new() }),
                 },
-                props: vec![],
+                props: vec![].into(),
             }
         };
         // Helper to build the statement that running with the loop counter set to `n` runs for
@@ -169,7 +169,7 @@ fn run(path: &str) -> Result<(), String> {
         let p = |n: Term| {
             Prop::Forall(Binder::new(|_| {
                 let step = p_step(n.shift());
-                (vec![Prop::Nonzero(Term::cmpa(1000.into(), n.shift()))], Box::new(step))
+                (vec![Prop::Nonzero(Term::cmpa(1000.into(), n.shift()))].into(), Box::new(step))
             }))
         };
 
@@ -217,7 +217,7 @@ fn run(path: &str) -> Result<(), String> {
                     let l_imp = pf.admit(Prop::implies(vec![
                         Prop::Nonzero(Term::cmpa(1000.into(), Term::add(n.clone(), 1.into()))),
                         Prop::Nonzero(Term::cmpa(Term::add(n.clone(), 1.into()), 0.into())),
-                    ], Prop::Nonzero(Term::cmpa(1000.into(), n.clone()))));
+                    ].into(), Prop::Nonzero(Term::cmpa(1000.into(), n.clone()))));
                     pf.tactic_apply0(l_imp)?;
 
                     let l = pf.rule_shift(1, 1);

@@ -117,6 +117,12 @@ impl<T: Fold> Fold for Box<T> {
     }
 }
 
+impl<T: Fold> Fold for Box<[T]> {
+    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+        self.iter().map(|x| x.fold_with(f)).collect()
+    }
+}
+
 impl<T: Fold> Fold for Vec<T> {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
         self.iter().map(|x| x.fold_with(f)).collect()

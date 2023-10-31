@@ -106,6 +106,14 @@ impl<T: Visit> Visit for Box<T> {
     }
 }
 
+impl<T: Visit> Visit for Box<[T]> {
+    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+        for x in self.iter() {
+            x.visit_with(f);
+        }
+    }
+}
+
 impl<T: Visit> Visit for Vec<T> {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
         for x in self {

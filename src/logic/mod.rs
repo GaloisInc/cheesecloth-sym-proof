@@ -183,7 +183,7 @@ pub enum Prop {
     /// `t != 0`
     Nonzero(Term),
     /// `forall xs, Ps(xs) -> Q(xs)`
-    Forall(Binder<(Vec<Prop>, Box<Prop>)>),
+    Forall(Binder<(Box<[Prop]>, Box<Prop>)>),
     /// ```
     /// forall s,
     /// (exists x, pre(s, x)) =>
@@ -228,16 +228,16 @@ pub struct ReachableProp {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct StatePred {
     pub state: symbolic::State,
-    pub props: Vec<Prop>,
+    pub props: Box<[Prop]>,
 }
 
 impl Prop {
-    pub fn implies(premises: Vec<Prop>, conclusion: Prop) -> Prop {
+    pub fn implies(premises: Box<[Prop]>, conclusion: Prop) -> Prop {
         Prop::Forall(Binder::new(|_| (premises.shift(), Box::new(conclusion.shift()))))
     }
 
     pub fn implies1(premise: Prop, conclusion: Prop) -> Prop {
-        Prop::implies(vec![premise], conclusion)
+        Prop::implies(Box::new([premise]), conclusion)
     }
 
     pub fn for_each_var<T>(&self, f: &mut impl FnMut(VarId) -> Option<T>) -> Option<T> {
@@ -245,7 +245,7 @@ impl Prop {
             Prop::Nonzero(ref t) => t.for_each_var(f),
             Prop::Forall(ref b) => {
                 let (ref ps, ref p) = b.inner;
-                for p in ps {
+                for p in ps.iter() {
                     if let Some(x) = p.for_each_var(f) {
                         return Some(x);
                     }
