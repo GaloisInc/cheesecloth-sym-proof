@@ -7,7 +7,6 @@ use std::mem;
 pub mod micro_ram;
 pub mod kernel;
 pub mod logic;
-pub mod proof;
 pub mod symbolic;
 pub mod tactics;
 
