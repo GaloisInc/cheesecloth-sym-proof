@@ -134,3 +134,9 @@ impl<T: Fold, const N: usize> Fold for [T; N] {
         array::from_fn(|i| self[i].fold_with(f))
     }
 }
+
+impl<A: Fold, B: Fold> Fold for (A, B) {
+    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
+        (self.0.fold_with(f), self.1.fold_with(f))
+    }
+}

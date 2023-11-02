@@ -129,3 +129,10 @@ impl<T: Visit, const N: usize> Visit for [T; N] {
         }
     }
 }
+
+impl<A: Visit, B: Visit> Visit for (A, B) {
+    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+        self.0.visit_with(f);
+        self.1.visit_with(f);
+    }
+}
