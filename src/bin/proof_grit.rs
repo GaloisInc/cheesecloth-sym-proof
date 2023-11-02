@@ -14,7 +14,7 @@ use std::env;
 use env_logger;
 use log::trace;
 use sym_proof::kernel::Proof;
-use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred, VarId};
+use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred};
 use sym_proof::logic::shift::ShiftExt;
 use sym_proof::micro_ram::Program;
 use sym_proof::micro_ram::import;
@@ -106,9 +106,9 @@ fn run(path: &str) -> Result<(), String> {
                     }),
                     min_cycles: b.clone(),
                 }),
-            ], (b, n))
+            ], n)
         },
-        |pf, (b, n)| {
+        |pf, n| {
             // Prove the conclusion.
             //pf.show_context();
             let p_reach = (1, 1);
@@ -122,6 +122,7 @@ fn run(path: &str) -> Result<(), String> {
             let p_ne = pf.tactic_admit(
                 Prop::Nonzero(Term::cmpe(Term::cmpe(n.clone(), 0.into()), 0.into())));
             let (p_reach, p_ne) = pf.tactic_swap(p_reach, p_ne);
+            let _ = p_ne;
 
             pf.tactic_reach_extend(p_reach, |rpf| {
                 //rpf.show_context();
@@ -226,7 +227,7 @@ fn run(path: &str) -> Result<(), String> {
                     let p = mk_prop_reach(0.into(), b);
                     (vec![p], b)
                 },
-                |pf, b| {
+                |_pf, _b| {
                     // No-op.  The conclusion for the zero case is the same as the last premise.
                 },
             );
@@ -243,8 +244,9 @@ fn run(path: &str) -> Result<(), String> {
                     let n = n.shift();
                     let n_plus_1 = Term::add(n, 1.into());
                     //pf.show_context();
+
                     let p_iter = pf.tactic_clone(p_iter);
-                    let p_first = pf.tactic_apply(p_iter, &[b, n_plus_1]);
+                    let _p_first = pf.tactic_apply(p_iter, &[b, n_plus_1]);
 
                     pf.tactic_admit(Prop::Nonzero(Term::cmpa(1000.into(), n)));
                     let p_ind = pf.tactic_clone((1, 1));
@@ -304,7 +306,7 @@ fn run(path: &str) -> Result<(), String> {
     let p_exec = pf.tactic_apply(p_loop_n, &[conc_state.cycle.into()]);
 
 
-    println!("\nfinal theorem:\n{}", pf.print(pf.props().last().unwrap()));
+    println!("\nfinal theorem:\n{}", pf.print(&pf.props()[p_exec.1]));
 
     println!("ok");
     Ok(())
