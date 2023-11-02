@@ -5,7 +5,7 @@ use std::path::Path;
 use witness_checker::mode::if_mode::{self, Mode};
 use witness_checker::micro_ram::types::{self, VersionedMultiExec, ExecBody, RamInstr, RamState};
 use crate::{Addr, Word, BinOp, WORD_BYTES};
-use crate::micro_ram::{Instr, Opcode, MemWidth, Reg, Operand, NUM_REGS, State};
+use crate::micro_ram::{Instr, Opcode, MemWidth, Reg, Operand, NUM_REGS, State, ProgramChunk};
 
 
 pub fn with_globals<R>(f: impl FnOnce() -> R) -> R {
@@ -49,6 +49,37 @@ pub fn convert_code(exec: &ExecBody) -> HashMap<Addr, Instr> {
         }
     }
     m
+}
+
+pub fn convert_code_split(exec: &ExecBody) -> (Vec<Instr>, Vec<ProgramChunk>) {
+    let mut instrs = Vec::with_capacity(exec.program.iter().map(|cs| cs.instrs.len()).sum());
+    let mut chunks = Vec::with_capacity(exec.program.len());
+    let dummy_instr = Instr {
+        opcode: Opcode::Answer,
+        rd: 0,
+        r1: 0,
+        op2: Operand::Imm(0),
+    };
+    for cs in &exec.program {
+        chunks.push(ProgramChunk {
+            start_addr: cs.start as Addr,
+            start_index: instrs.len(),
+            len: cs.len as usize,
+        });
+        instrs.extend(
+            cs.instrs.iter().enumerate()
+                .map(|(i, &ram_instr)| {
+                    convert_instr(ram_instr).unwrap_or_else(|| {
+                        panic!("bad instr (opcode = {:?}) at {}",
+                            ram_instr.opcode(), cs.start + i as u64);
+                    })
+                })
+                .chain(iter::repeat(dummy_instr))
+                .take(cs.len as usize),
+        );
+    }
+    chunks.sort_by_key(|c| c.start_addr);
+    (instrs, chunks)
 }
 
 pub fn convert_instr(ram_instr: RamInstr) -> Option<Instr> {
