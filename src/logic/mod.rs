@@ -7,6 +7,7 @@ use crate::symbolic;
 
 pub mod fold;
 pub mod print;
+pub mod rename_vars;
 pub mod shift;
 pub mod subst;
 pub mod term;
