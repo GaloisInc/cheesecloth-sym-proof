@@ -219,7 +219,7 @@ impl Print for ReachableProp {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         let ReachableProp { ref pred, min_cycles } = *self;
         write!(
-            f, "{{init}} ->({}) {{{}}}",
+            f, "reach({}, {{{}}})",
             p.display(&min_cycles),
             p.display(&PrintBinder(BinderMode::Exists, pred)),
         )
