@@ -9,6 +9,7 @@ pub mod kernel;
 pub mod logic;
 pub mod proof;
 pub mod symbolic;
+pub mod tactics;
 
 
 
