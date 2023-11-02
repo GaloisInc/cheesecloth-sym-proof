@@ -1,5 +1,5 @@
 use std::array;
-use super::{VarId, Term, TermKind, Prop, StepProp, ReachableProp, StatePred, Binder};
+use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder};
 
 
 pub trait Folder {
@@ -67,19 +67,7 @@ impl Fold for Prop {
                     (ps.fold_with(f), q.fold_with(f))
                 }))
             },
-            Prop::Step(ref sp) => Prop::Step(sp.fold_with(f)),
             Prop::Reachable(ref rp) => Prop::Reachable(rp.fold_with(f)),
-        }
-    }
-}
-
-impl Fold for StepProp {
-    fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
-        let StepProp { ref pre, ref post, min_cycles } = *self;
-        StepProp {
-            pre: pre.fold_with(f),
-            post: post.fold_with(f),
-            min_cycles: min_cycles.fold_with(f),
         }
     }
 }

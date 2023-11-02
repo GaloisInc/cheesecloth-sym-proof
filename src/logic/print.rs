@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::rc::Rc;
 use crate::BinOp;
-use super::{VarId, Term, TermKind, Prop, StepProp, ReachableProp, StatePred, Binder, VarCounter};
+use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder, VarCounter};
 
 
 
@@ -158,7 +158,6 @@ impl Print for Prop {
                 })
             },
 
-            Prop::Step(ref sp) => sp.print(p, f),
             Prop::Reachable(ref rp) => rp.print(p, f),
         }
     }
@@ -200,18 +199,6 @@ fn print_binder(
                 write!(f, "{} {} .. {}, ", mode, p.display(&v0), p.display(&vn))
             })
         },
-    }
-}
-
-impl Print for StepProp {
-    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
-        let StepProp { ref pre, ref post, min_cycles } = *self;
-        write!(
-            f, "{{{}}} ->({}) {{{}}}",
-            p.display(&PrintBinder(BinderMode::Exists, pre)),
-            p.display(&min_cycles),
-            p.display(&PrintBinder(BinderMode::Exists, post)),
-        )
     }
 }
 

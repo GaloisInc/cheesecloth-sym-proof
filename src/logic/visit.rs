@@ -1,4 +1,4 @@
-use super::{VarId, Term, TermKind, Prop, StepProp, ReachableProp, StatePred, Binder};
+use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder};
 
 
 pub trait Visitor {
@@ -69,18 +69,8 @@ impl Visit for Prop {
                     q.visit_with(f);
                 })
             },
-            Prop::Step(ref sp) => sp.visit_with(f),
             Prop::Reachable(ref rp) => rp.visit_with(f),
         }
-    }
-}
-
-impl Visit for StepProp {
-    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
-        let StepProp { ref pre, ref post, min_cycles } = *self;
-        f.visit_binder(pre, |f, sp| sp.visit_with(f));
-        f.visit_binder(post, |f, sp| sp.visit_with(f));
-        min_cycles.visit_with(f);
     }
 }
 

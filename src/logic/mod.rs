@@ -185,32 +185,8 @@ pub enum Prop {
     Nonzero(Term),
     /// `forall xs, Ps(xs) -> Q(xs)`
     Forall(Binder<(Box<[Prop]>, Box<Prop>)>),
-    /// ```
-    /// forall s,
-    /// (exists x, pre(s, x)) =>
-    /// (exists s' x' n, post(s', x') /\ s ->n s' /\ n >= N)
-    /// ```
-    Step(StepProp),
     /// `exists s x n, pred(s, x) /\ reachable(s, n) /\ n >= min_cycles`
     Reachable(ReachableProp),
-}
-
-/// ```
-/// forall s,
-/// (exists x, pre(s, x)) =>
-/// (exists s' x' n, post(s', x') /\ s ->n s' /\ n >= min_cycles)
-/// ```
-///
-/// `s` and `s'` are not represented specifically; the `forall s` and `exists s'` parts are "built
-/// in" so that we don't need to support arbitrary quantification over states (`Prop::Forall` only
-/// allows quantifying over `Word`s).  `n` also isn't represented explicitly.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct StepProp {
-    pub pre: Binder<StatePred>,
-    pub post: Binder<StatePred>,
-    /// Note `min_cycles` is not under a binder - it must be expressed in terms of variables
-    /// already in scope.
-    pub min_cycles: Term,
 }
 
 /// ```
@@ -253,8 +229,7 @@ impl Prop {
                 }
                 p.for_each_var(f)
             },
-            // TODO: implement these cases?
-            Prop::Step(_) => None,
+            // TODO: implement this case?
             Prop::Reachable(_) => None,
         }
     }
