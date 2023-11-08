@@ -513,7 +513,9 @@ impl State {
 	self.validate_pc(&conc_st.pc)?;
 	self.validate_regs(&conc_st.regs)?;
 	self.validate_mem(&conc_st.mem)?;
-	eprintln!("Validated!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+	#[cfg(feature = "verbose")] {
+            println!("\tValidated with a concrete execution");
+        }
 	return Ok(())
     }
     fn validate_pc(&self, conc_pc: &Addr) -> Result<(), String> {
