@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::{Word, WORD_BYTES, Addr};
-use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand};
+use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand, Instr};
 use crate::logic::{Term, VarId, Prop};
 use crate::logic::fold::{Fold, Folder};
 use crate::logic::print::debug_print;
@@ -429,11 +429,21 @@ impl Fold for MemMulti {
 /// * `s.mem` satisfies the predicate `self.mem`.
 ///
 /// TODO: Clarify details of the memory predicate
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Eq, Debug)]
 pub struct State {
     pub pc: Word,
     pub regs: [Term; NUM_REGS],
     pub mem: MemState,
+    pub conc_st: Option<micro_ram::State>,
+}
+
+impl PartialEq for State {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare all the fields except for conc_st
+        self.pc == other.pc
+            && self.regs == other.regs
+            && self.mem == other.mem
+    }
 }
 
 impl State {
@@ -441,8 +451,9 @@ impl State {
         pc: Word,
         regs: [Term; NUM_REGS],
         mem: MemState,
+	conc_st: Option<micro_ram::State>,
     ) -> State {
-        State { pc, regs, mem }
+        State { pc, regs, mem, conc_st}
     }
 
     pub fn pc(&self) -> Word {
@@ -472,6 +483,64 @@ impl State {
         self.regs[reg as usize] = val;
     }
 
+
+    // Step the concrete state
+    pub fn conc_step(&mut self, instr: Instr, advice: Option<Word>) -> () {
+	if let Some(ref mut conc_state) = self.conc_st {
+	    conc_state.step(instr, advice);
+	    self.validate().unwrap();
+        }
+    }
+    
+    // Validate the symbolic state, as a predicate, over the concrete
+    // state conc_st, which should be executed in parallel to the
+    // symbolic state.
+    pub fn validate(&self) -> Result<(), String> {
+	eprintln!("Validating the state!");
+	match &self.conc_st
+	{
+	    Some (cst) => self.validate_conc_state(cst),
+	    None => return Ok(())
+	}	
+    }
+
+    // Validate the symbolic state, as a predicate, over some provided
+    // concrete state
+    pub fn validate_conc_state(&self, conc_st: &micro_ram::State) -> Result<(), String> {
+	self.validate_pc(&conc_st.pc)?;
+	self.validate_regs(&conc_st.regs)?;
+	self.validate_mem(&conc_st.mem)?;
+	eprintln!("Validated!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+	return Ok(())
+    }
+    fn validate_pc(&self, conc_pc: &Addr) -> Result<(), String> {
+	if self.pc != *conc_pc{
+	    return Err(format!("Pc's don't match. Symbolic {} != Concrete {}", self.pc, conc_pc));
+	}
+	return Ok(())
+    }
+    // For now, it only checks one thing:
+    // 1. Concrete Terms match and 
+    fn validate_regs(&self, conc_regs: &[Word; NUM_REGS]) -> Result<(), String> {
+	for (i, reg) in self.regs.iter().enumerate() {
+	    let conc_reg = conc_regs[i];
+	    match reg.as_const() {
+		Some(w) => {
+		    if w != conc_reg {
+			return Err(format!("regs's don't match. Symb r[{}]={} != Conc r[{}]={}", i, w, i, conc_reg));
+		    }
+		},
+		// Checks for symbolic terms not implemented yet
+		_ => ()
+	    }
+	}
+	return Ok(())
+    }
+    fn validate_mem(&self, conc_mem: &HashMap<u64, u64>) -> Result<(), String> {
+	// Not yet implemented
+	return Ok(())
+    }
+    
     /*
     pub fn subst<S: Subst>(&self, subst: &mut S) -> State {
         if S::IS_IDENTITY {
@@ -520,7 +589,7 @@ impl State {
 
 impl Visit for State {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
-        let State { pc: _, ref regs, ref mem } = *self;
+        let State { pc: _, ref regs, ref mem, conc_st: _ } = *self;
         regs.visit_with(f);
         mem.visit_with(f);
     }
@@ -528,11 +597,12 @@ impl Visit for State {
 
 impl Fold for State {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
-        let State { pc, ref regs, ref mem } = *self;
+        let State { pc, ref regs, ref mem, conc_st: _ } = *self;
         State {
             pc,
             regs: regs.fold_with(f),
             mem: mem.fold_with(f),
+	    conc_st: None, // Should we fold through it?
         }
     }
 }

@@ -643,10 +643,19 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     fn finish_instr_jump(&mut self, pc: Addr) {
         self.state.pc = pc;
         self.cycles += 1;
+	self.conc_step();
     }
 
     fn fresh_var(&mut self) -> Term {
         self.pf.cur.vars.fresh()
+    }
+
+    fn conc_step(&mut self) {
+	let instr = self.fetch_instr();
+	// We shouldn't have advice in proofs.
+	// Advice should be handled explicitely.
+	let advice = None;
+        self.state.conc_step(instr, advice);
     }
 
     /// Introduce a new unconstrained variable.

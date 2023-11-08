@@ -130,7 +130,7 @@ impl Index<Addr> for Program<'_> {
 
 pub const NUM_REGS: usize = 33;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct State {
     pub pc: Addr,
     pub cycle: Word,
