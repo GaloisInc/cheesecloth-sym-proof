@@ -608,10 +608,14 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         self.state.pc
     }
 
-    fn fetch_instr(&self) -> Instr {
-        let pc = self.pc();
+    fn get_instr_at(&self, pc:Addr) -> Instr {
         self.pf.prog.get(pc).cloned()
             .unwrap_or_else(|| die!("program executed out of bounds at {}", pc))
+    }
+    
+    fn fetch_instr(&self) -> Instr {
+        let pc = self.pc();
+	self.get_instr_at(pc)
     }
 
     fn reg_value(&self, reg: Reg) -> Term {
@@ -651,7 +655,8 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     }
 
     fn conc_step(&mut self) {
-	let instr = self.fetch_instr();
+	let conc_pc = self.state.pc();
+	let instr = self.get_instr_at(conc_pc);
 	// We shouldn't have advice in proofs.
 	// Advice should be handled explicitely.
 	let advice = None;
