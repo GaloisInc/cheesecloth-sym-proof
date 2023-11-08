@@ -655,12 +655,12 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     }
 
     fn conc_step(&mut self) {
-	let conc_pc = self.state.pc();
-	let instr = self.get_instr_at(conc_pc);
 	// We shouldn't have advice in proofs.
 	// Advice should be handled explicitely.
 	let advice = None;
-        self.state.conc_step(instr, advice);
+	let conc_pc = self.state.conc_pc().unwrap_or(0);
+	let instr = self.get_instr_at(conc_pc);
+	self.state.conc_step(instr, advice);
     }
 
     /// Introduce a new unconstrained variable.

@@ -492,11 +492,14 @@ impl State {
         }
     }
     
+    pub fn conc_pc(&self) -> Option <Addr> {
+	self.conc_st.as_ref().map(|st| st.pc).clone()
+    }
+    
     // Validate the symbolic state, as a predicate, over the concrete
     // state conc_st, which should be executed in parallel to the
     // symbolic state.
     pub fn validate(&self) -> Result<(), String> {
-	eprintln!("Validating the state!");
 	match &self.conc_st
 	{
 	    Some (cst) => self.validate_conc_state(cst),
