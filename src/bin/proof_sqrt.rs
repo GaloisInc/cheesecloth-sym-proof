@@ -10,7 +10,7 @@
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
 use std::array;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use env_logger;
 use log::trace;
@@ -20,7 +20,8 @@ use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred}
 use sym_proof::logic::shift::ShiftExt;
 use sym_proof::micro_ram::Program;
 use sym_proof::micro_ram::import;
-use sym_proof::symbolic::{self, MemState, MemLog};
+use sym_proof::micro_ram::{Opcode, MemWidth, mem_load};
+use sym_proof::symbolic::{self, MemState, MemLog, Memory, MemMap, MemConcrete};
 use sym_proof::tactics::{Tactics, ReachTactics};
 use witness_checker::micro_ram::types::Advice;
 
@@ -66,15 +67,102 @@ fn run(path: &str) -> Result<(), String> {
 	let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
         conc_state.step(instr, adv);
     }
+
+    eprintln!("STOPed the first run of concrete execution. Pc {}. Cycle {}", conc_state.pc, conc_state.cycle);
     
 
+    // TODO: remmove this looping and make it lean.
+    let num_loops = 10;
+    eprintln!("Now lets go around {} loops to see how registers change", num_loops);
+    let mut last_cycle_seen = conc_state.cycle;
+    // record the registers
+    let mut reg_log = vec![vec![0; num_loops]; conc_state.regs.len()];
+
+    for li in 0 .. num_loops{
+	// Do a step to move away from the label
+	let instr = prog[conc_state.pc];
+	let cyc = conc_state.cycle;
+	// For some reason the cycle is off by one wrt advice
+	let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
+        conc_state.step(instr, adv);
+	
+	// The run until the label is found again
+	while conc_state.pc != loop_addr {
+            let instr = prog[conc_state.pc];
+	    let cyc = conc_state.cycle;
+	    // For some reason the cycle is off by one wrt advice
+	    let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
+            conc_state.step(instr, adv);
+	}
+	eprintln!{"Testing the loop: Loop took {} cycles", conc_state.cycle - last_cycle_seen};
+	last_cycle_seen = conc_state.cycle;
+
+	for (ri, &x) in conc_state.regs.iter().enumerate() {
+	    reg_log[ri][li] = x;
+	}
+    }
+
+    eprintln!("Log of registers during the loop ");
+    for (i, &x) in conc_state.regs.iter().enumerate() {
+        eprintln!("{:2}: {:?}", i, reg_log[i]);
+    }
+
+    
+    // TODO this could be done in a separate state. Or even do once
+    // and store in a file.  We store the first time an address is
+    // loaded with the value.
+    // TODO: We could skip addresses that where stored first, but this
+    // gets odd with the byte addressing.
+    eprintln!("Now lets go around once more to register memory usage.");
+    let mut load_mem  : HashSet<(Addr, MemWidth, Word)> = HashSet::new();
+    
+    // Do a step to move away from the label
+    let instr = prog[conc_state.pc];
+    let cyc = conc_state.cycle;
+    // For some reason the cycle is off by one wrt advice
+    let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
+    conc_state.step(instr, adv); //we assume/know this step is not a memory step.
+    
+    // The run until the label is found again
+    while conc_state.pc != loop_addr {
+        let instr = prog[conc_state.pc];
+	let cyc = conc_state.cycle;
+	// For some reason the cycle is off by one wrt advice
+	let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
+	let pc = conc_state.pc;
+        conc_state.step(instr, adv);
+
+	match instr.opcode {
+            Opcode::Load(w) => {
+		let addr = conc_state.operand_value(instr.op2);
+		load_mem.insert((addr, w, pc));
+            },
+	    _ => ()
+	}
+    }
+    // At the end of the loop (i.e. back at the initial state) we fill
+    // in the values of memory
+    
+    let mut init_mem_map = MemMap::new(u64::MAX);
+    for &(addr, ww, pc) in load_mem.iter(){
+	let val = mem_load(&conc_state.mem, ww, addr);
+	init_mem_map.store(ww, Term::const_(addr), Term::const_(val), &[])?;
+	let to_problem_address = addr - 4295563809;
+	if addr.abs_diff(4295563809) < 10 {
+            eprintln!("Loading to address {}. w={:?}, val={}, pc={}", addr, ww, val, pc); 
+	    
+	}
+	    
+    }
+
+    
     
     // Run concretely: 8 steps to the start of the loop, then 11 more steps to run the first
     // iteration up to the condition check.  The loop is structured as a do/while, so the condition
     // check comes at the end.
     for _ in 0 .. 8 + 11 {
         let instr = prog[conc_state.pc];
-        //eprintln!("run concrete [{}]: {:?}", conc_state.pc, instr);
+        eprintln!("run concrete [{}]: {:?}", conc_state.pc, instr);
         conc_state.step(instr, None);
     }
 
@@ -82,8 +170,6 @@ fn run(path: &str) -> Result<(), String> {
     for (i, &x) in conc_state.regs.iter().enumerate() {
         eprintln!("{:2}: 0x{:x}", i, x);
     }
-
-    eprintln!("STOPed concrete execution. Pc {}. Cycle {}", conc_state.pc, conc_state.cycle);
 
     // ----------------------------------------
     // Set up the proof state
@@ -120,13 +206,14 @@ fn run(path: &str) -> Result<(), String> {
                                     // `rN = xN`.
                                     let v = vars.fresh();
                                     match r {
-                                        12 => n.clone(),
-                                        _ => v,
+					8 => n.clone(),
+					_ => conc_state.regs[r].into(),
                                     }
                                 }),
                                 // Memory in the initial state is an empty `MemLog`, which implies
                                 // that nothing is known about memory.
                                 mem: MemState::Log(MemLog::new()),
+				conc_st: Some (conc_state.clone()),
                             },
                             props: vec![].into(),
                         }
@@ -158,10 +245,12 @@ fn run(path: &str) -> Result<(), String> {
                 // Symbolic execution through one iteration of the loop.
 		
 		eprintln!("1. Run until stuck");
-                rpf.tactic_run();
+                rpf.tactic_run_db();
 		eprintln!("2. Run a load");
                 rpf.rule_step_load_fresh();
-                eprintln!("3. Run jump. pc {}", conc_state.pc);
+                eprintln!("3. Run until stuck");
+                rpf.tactic_run_db();
+		eprintln!("4. Run jump. pc {}", conc_state.pc);
                 rpf.rule_step_jump(true);
 		eprintln!("4. Run until stuck");
 		rpf.tactic_run();
@@ -221,11 +310,12 @@ fn run(path: &str) -> Result<(), String> {
                 regs: array::from_fn(|r| {
                     let v = vars.fresh();
                     match r {
-                        12 => n,
-                        _ => v,
+                        8 => n.clone(),
+			_ => conc_state.regs[r].into(),
                     }
                 }),
                 mem: MemState::Log(MemLog { l: Vec::new() }),
+		conc_st: Some (conc_state.clone()),
             },
             props: vec![].into(),
         }
@@ -315,6 +405,7 @@ fn run(path: &str) -> Result<(), String> {
                     pc: conc_state.pc,
                     regs: conc_state.regs.map(|x| x.into()),
                     mem: MemState::Log(MemLog::new()),
+		    conc_st: Some (conc_state.clone()),
                 },
                 props: Box::new([]),
             }
