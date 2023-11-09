@@ -697,8 +697,10 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     }
 
     fn mem_load(&self, w: MemWidth, addr: Term) -> Term {
-        let _ = (w, addr);
-        die!("StepProof::mem_load not yet implemented")
+        //let _ = (w, addr);
+        //die!("StepProof::mem_load not yet implemented")
+	self.state.mem.load(w, addr, &[])
+            .unwrap_or_else(|e| die!("mem_load failed: {}", e))
     }
 
     fn finish_instr(&mut self) {

@@ -159,9 +159,11 @@ fn run(path: &str) -> Result<(), String> {
 		
 		eprintln!("1. Run until stuck");
                 rpf.tactic_run();
-                eprintln!("2. Run jump. pc {}", conc_state.pc);
+		eprintln!("2. Run a load");
+                rpf.rule_step_load_fresh();
+                eprintln!("3. Run jump. pc {}", conc_state.pc);
                 rpf.rule_step_jump(true);
-		eprintln!("3. Run until stuck");
+		eprintln!("4. Run until stuck");
 		rpf.tactic_run();
 		eprintln!("4. Run a load");
                 rpf.rule_step_load_fresh();
