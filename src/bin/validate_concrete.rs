@@ -59,15 +59,26 @@ fn run(path: &str) {
             state.step(instr, advice);
 
             assert_eq!(state.pc, expect_state.pc, "after cycle {}", cycle);
-            assert_eq!(state.regs, expect_state.regs, "after cycle {}", cycle);
+            assert_eq!(state.regs, expect_state.regs, "\n after cycle {} and pc {}", cycle, state.pc);
 
             for adv in advs {
                 if let Advice::MemOp { addr, value, .. } = *adv {
                     let offset_mask = WORD_BYTES as Addr - 1;
                     let word_addr = addr as Addr & !offset_mask;
-                    assert_eq!(state.mem[&word_addr], value as Word,
+		    // Check if the address has been written to.
+		    if state.mem.contains_key(&word_addr) {
+			assert_eq!(state.mem[&word_addr], value as Word,
                         "at address {}, after cycle {}", addr, cycle);
-                    mem_op_count += 1;
+		    } else {
+			// If the address hasn't been written to, we
+			// default to 0.  This can happen, for
+			// example, when RiscV want's to write a byte
+			// to a fresh address.  It will first read the
+			// word and modify the byte, preserving the
+			// rest of the word (possibly uninitialized)
+			assert_eq!(value, 0, "at address {}, after cycle {} (default value)", addr, cycle);
+		    }
+		    mem_op_count += 1;
                 }
             }
 
