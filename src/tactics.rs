@@ -232,18 +232,33 @@ pub trait ReachTactics<'a, 'b: 'a> {
     fn proof_mut(&mut self) -> &mut ReachProof<'a, 'b>;
 
     /// Apply `rule_step` repeatedly until it returns `Err`.
+
     fn tactic_run(&mut self) {
         let pf = self.proof_mut();
-        while pf.try_rule_step() {
+        while pf.try_rule_step().is_ok() {
             // No-op
         }
     }
 
+    /// Apply `rule_step` repeatedly until it returns `Err`, showing the error when it fails
+    fn tactic_run_db(&mut self) {
+        let pf = self.proof_mut();
+	while true {
+	    match pf.try_rule_step() {
+		Err (msg) => {
+		    eprintln!("Simple step failed with {}", msg);
+		    return
+		}
+		Ok (_) => ()
+	    }
+        }
+    }
+    
     /// Apply `rule_step` until we reach the given `pc`.  Returns `Err` if `rule_step` reports an
     /// error before `pc` is reached.
     fn tactic_run_until(&mut self, pc: Addr) {
         let pf = self.proof_mut();
-        while pf.pc() != pc && pf.try_rule_step() {
+        while pf.pc() != pc && pf.try_rule_step().is_ok() {
             // No-op
         }
     }

@@ -809,7 +809,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Try to take a step.  Returns `true` on success or `false` if `rule_step` panics.  On
     /// failure, the proof state remains unchanged.
-    pub fn try_rule_step(&mut self) -> bool {
+    pub fn try_rule_step(&mut self) -> Result<(),String> {
         use std::panic::{self, AssertUnwindSafe};
 
         // Use an empty panic hook to suppress the "thread 'main' panicked at ..." message.
@@ -819,12 +819,28 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         let f = AssertUnwindSafe(|| {
             self.rule_step();
         });
-        let ok = panic::catch_unwind(|| {
+        let result = panic::catch_unwind(|| {
             advice::rollback_on_panic(f);
-        }).is_ok();
+        });
 
         panic::set_hook(old_hook);
 
+	//Easily readable error for debugging tactics
+	let ok: Result<(), String> = match result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if let Some(msg) = err.downcast_ref::<&'static str>() {
+                Err(format!("Panic message: {}", msg))
+            } else if let Some(msg) = err.downcast_ref::<String>() {
+		Err(format!("Panic message: {}", msg))
+            } else {
+                // If downcast to String or CustomError fails, provide a default error message
+		Err(format!("Unknown error occurred of type: {:?}", err))
+            }
+        }
+	};
+
+	
         ok
     }
 
