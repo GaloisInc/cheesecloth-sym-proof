@@ -212,7 +212,7 @@ fn run(path: &str) -> Result<(), String> {
                                 }),
                                 // Memory in the initial state is an empty `MemLog`, which implies
                                 // that nothing is known about memory.
-                                mem: MemState::Log(MemLog::new()),
+                                mem: MemState::Map(init_mem_map),
 				conc_st: Some (conc_state.clone()),
                             },
                             props: vec![].into(),
@@ -247,6 +247,7 @@ fn run(path: &str) -> Result<(), String> {
 		eprintln!("1. Run until stuck");
                 rpf.tactic_run_db();
 		eprintln!("2. Run a load");
+		rpf.print_conc_st();
                 rpf.rule_step_load_fresh();
                 eprintln!("3. Run until stuck");
                 rpf.tactic_run_db();

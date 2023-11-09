@@ -664,9 +664,12 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         self.cycles
     }
 
-
     pub fn pc(&self) -> Addr {
         self.state.pc
+    }
+
+    pub fn print_conc_st(&self) {
+        eprintln!("CONCRETE REGS: {:?}",self.state.conc_st.clone().map(|st| st.regs));
     }
 
     fn get_instr_at(&self, pc:Addr) -> Instr {
@@ -776,8 +779,34 @@ impl<'a, 'b> ReachProof<'a, 'b> {
                 self.finish_instr_jump(dest);
                 return;
             },
-            Opcode::Cjmp => die!("can't use rule_step for Cjmp"),
-            Opcode::Cnjmp => die!("can't use rule_step for Cnjmp"),
+            Opcode::Cjmp => {
+                let cond = x.as_const_or_err()
+                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
+                let dest = y.as_const_or_err()
+                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
+                eprintln!("run {}: {:?} (Cjmp)", self.pc(), instr);
+		if cond == 0{
+		    self.finish_instr();
+                    return ();
+		} else {
+		    self.finish_instr_jump(dest);
+                    return ();
+		}
+            },
+	    Opcode::Cnjmp => {
+                let cond = x.as_const_or_err()
+                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
+                let dest = y.as_const_or_err()
+                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
+                eprintln!("run {}: {:?} (Cjmp)", self.pc(), instr);
+		if cond != 0{
+		    self.finish_instr();
+                    return ();
+		} else {
+		    self.finish_instr_jump(dest);
+                    return ();
+		}
+            },
 
             // Note: `mem_store` and `mem_load` can fail.  For `try_rule_step`, it's important that
             // we not perform any side effects prior to a panic.
