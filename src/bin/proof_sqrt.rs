@@ -244,14 +244,16 @@ fn run(path: &str) -> Result<(), String> {
 
                 // Symbolic execution through one iteration of the loop.
 		
-		eprintln!("1. Run until stuck");
+		eprintln!("1. Run until stuck. pc {}, cycle {:?}",
+			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
                 rpf.tactic_run_db();
 		eprintln!("2. Run a load");
-		rpf.print_conc_st();
                 rpf.rule_step_load_fresh();
                 eprintln!("3. Run until stuck");
                 rpf.tactic_run_db();
-		eprintln!("4. Run jump. pc {}", conc_state.pc);
+		eprintln!("4. Run jump. pc {}, cycle {:?}",
+			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
+		rpf.print_conc_st();
                 rpf.rule_step_jump(true);
 		eprintln!("4. Run until stuck");
 		rpf.tactic_run();

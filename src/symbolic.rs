@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::{Word, WORD_BYTES, Addr};
+use crate::{Word, WORD_BYTES, WORD_BITS, Addr};
 use crate::advice::map::AMap;
 use crate::advice::vec::AVec;
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand, Instr};
@@ -190,6 +190,14 @@ impl EqShifted for MemConcrete {
 }
 
 
+fn extract_subword(t_const: Word, width: Word, offset: u8) -> Word {
+    let WORD_SIZE : u64 = WORD_BITS / WORD_BYTES;
+    let mask = (1u64 << width) - 1; // Create a mask with 'width' bits set to 1
+    let shifted_mask = mask << (offset as u64 * WORD_SIZE); // Shift the mask to the desired position
+
+    (t_const & shifted_mask) >> (offset as u64 * WORD_SIZE) // Apply the mask and shift to get the subword
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemMap {
     /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
@@ -236,11 +244,17 @@ impl MemMap {
         // We currently require the load to match a store exactly, so each consecutive address must
         // contain the next consecutive byte in order (starting from zero), and all bytes should be
         // extracted from the same expression.
+	// UNLESS the stored value is concrete, so we can just splice it as normal.
         let val = match self.m.get(&addr) {
             Some(&(t, offset)) => {
-                if offset != 0 {
-                    return Err(format!("NYI: load requires splicing bytes: \
-                        at 0x{:x}, got offset {}, but expected 0", addr, offset));
+		if offset != 0 {
+                    // Require t to be concrete
+		    match t.as_const() {
+			Some(t_const) => return Ok(Term::const_(extract_subword(t_const, w.bytes(), offset))),
+			None => 
+			    return Err(format!("NYI: load requires splicing bytes: \
+						at 0x{:x}, got offset {}, but expected 0", addr, offset)),
+		    }
                 }
                 t
             },
