@@ -253,6 +253,19 @@ pub trait ReachTactics<'a, 'b: 'a> {
 	    }
         }
     }
+    /// Apply `rule_step` repeatedly until it returns `Err`, showing the error when it fails
+    fn tactic_run_concrete(&mut self) {
+        let pf = self.proof_mut();
+	while true {
+	    match pf.try_rule_step_concrete() {
+		Err (msg) => {
+		    eprintln!("Concrete step failed with {}", msg);
+		    return
+		}
+		Ok (_) => ()
+	    }
+        }
+    }
     
     /// Apply `rule_step` until we reach the given `pc`.  Returns `Err` if `rule_step` reports an
     /// error before `pc` is reached.

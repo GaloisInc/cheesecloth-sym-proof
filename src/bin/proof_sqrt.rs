@@ -182,7 +182,7 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
 
     // We first prove a lemma of the form:
-    //      forall b n, n > 0 -> R({r12 = n}, b) -> R({r12 = n - 1}, b + 13)
+    //      forall b n, n > 0 -> R({r10 = i}, b) -> R({r10 = i + 2}, b + ???)
     // The proof is done by running symbolic execution.
     eprintln!("\nprove p_iter");
     let p_iter = pf.tactic_forall_intro(
@@ -191,22 +191,22 @@ fn run(path: &str) -> Result<(), String> {
             // one premise, `n > 0`.  The `Term` representing `n` will be passed through to the
             // proof callback.
             let b = vars.fresh();
-            let n = vars.fresh();
+            let i = vars.fresh();
             (vec![
-                Prop::Nonzero(Term::cmpa(n.clone(), 0.into())),
+		// i !=0
+                Prop::Nonzero(Term::cmpa(i.clone(), 0.into())),
+		// 1+i !=0
+                Prop::Nonzero(Term::cmpa(Term::add(1.into(), i.clone()), 0.into())),
                 Prop::Reachable(ReachableProp {
                     pred: Binder::new(|vars| {
-                        let n = n.shift();
+                        let i = i.shift();
                         StatePred {
                             state: symbolic::State {
                                 pc: conc_state.pc,
                                 regs: array::from_fn(|r| {
-                                    // We unconditionally allocate a var for each reg so that
-                                    // almost all registers will be set to the same-numbered var:
-                                    // `rN = xN`.
-                                    let v = vars.fresh();
+                                    // We keep all registers concrete, except for the index i in register 8.
                                     match r {
-					8 => n.clone(),
+					8 => i,
 					_ => conc_state.regs[r].into(),
                                     }
                                 }),
@@ -220,23 +220,27 @@ fn run(path: &str) -> Result<(), String> {
                     }),
                     min_cycles: b.clone(),
                 }),
-            ], n)
+            ], i)
         },
-        |pf, n| {
-            // Prove the conclusion.
-            //pf.show_context();
-            let p_reach = (1, 1);
+        |pf, i| {
+            // The reachability is in the next context (1) and it is
+            // the third prop (2)
+            let p_reach = (1, 2);
 
-            // From the premise `n > 0`, we can derive `n != 0`, which is needed to show that
-            // the jump is taken.
-            //
-            // We do this part early because the last lemma proved within this closure becomes
-            // the conclusion of the `forall`.
-            // TODO: pf.rule_gt_ne_unsigned(n.clone(), 0.into())?;
-            let p_ne = pf.tactic_admit(
-                Prop::Nonzero(Term::cmpe(Term::cmpe(n.clone(), 0.into()), 0.into())));
-            let (p_reach, p_ne) = pf.tactic_swap(p_reach, p_ne);
-            let _ = p_ne;
+            // We assume `i != 0` and `i+1 != 0`,
+	    // so we can go around the loop twice.
+	    let p_ne = pf.tactic_admit(
+                Prop::Nonzero(Term::cmpe(Term::cmpe(i.clone(), 0.into()), 0.into())));
+	    // ((1 == (a1 + 1)) == 0)
+	    let i1_not_0 = pf.tactic_admit(
+		Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), Term::add(i.clone(), 1.into())), 0.into())));
+	    let p_ne1 = pf.tactic_admit(
+                Prop::Nonzero(Term::cmpe(Term::cmpe(Term::add(i.clone(), 1.into()), 0.into()), 0.into())));
+
+		
+	    
+            let (p_reach, p_ne1) = pf.tactic_swap(p_reach, p_ne1);
+            // let _ = (p_ne,i1_not_0);
 
             pf.tactic_reach_extend(p_reach, |rpf| {
                 //rpf.show_context();
@@ -244,22 +248,54 @@ fn run(path: &str) -> Result<(), String> {
 
                 // Symbolic execution through one iteration of the loop.
 		
-		eprintln!("1. Run until stuck. pc {}, cycle {:?}",
+		eprintln!("1. Run concretely until. pc {}, cycle {:?}",
 			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
-                rpf.tactic_run_db();
-		eprintln!("2. Run a load");
-                rpf.rule_step_load_fresh();
-                eprintln!("3. Run until stuck");
-                rpf.tactic_run_db();
-		eprintln!("4. Run jump. pc {}, cycle {:?}",
+                rpf.tactic_run_concrete();
+		rpf.show_state();
+		
+		eprintln!("2. one symbolic step. pc {}, cycle {:?}",
 			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
-		rpf.print_conc_st();
-                rpf.rule_step_jump(true);
-		eprintln!("4. Run until stuck");
+                rpf.rule_step();
+		rpf.show_state();
+		
+		eprintln!("3. Run concretely until. pc {}, cycle {:?}",
+			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
+                rpf.tactic_run_concrete();
+		rpf.show_state();
+
+		eprintln!("4. Run a load, with the rule_step");
+                rpf.rule_step();
+		rpf.show_state();
+		
+                eprintln!("5. Run concretely until. pc {}, cycle {:?}",
+			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
+                rpf.tactic_run_concrete();
+		rpf.show_state();
+
+		eprintln!("6. Run until stuck");
+                rpf.tactic_run_db();
+		rpf.show_state();
+
+		
+                rpf.show_context();
+		eprintln!("7. Run jump. pc {}, cycle {:?}",
+			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
+		rpf.show_state();
+		rpf.tactic_run_concrete();
+		rpf.rule_step_jump(false);
+
+		eprintln!("8. Run until stuck");
+		rpf.show_state();
 		rpf.tactic_run();
-		eprintln!("4. Run a load");
-                rpf.rule_step_load_fresh();
-		eprintln!("5. Run until...");
+		
+		eprintln!("9. Run a Jump, pc {}, cycle {:?}",
+			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
+		rpf.show_state();
+		rpf.rule_step_jump(false);
+		
+		eprintln!("10. Run until...pc {}, cycle {:?}",
+			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
+		rpf.show_state();
                 rpf.tactic_run_until(conc_state.pc);
 
                 // Erase information about memory and certain registers to make it easier to

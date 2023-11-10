@@ -874,6 +874,22 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         ok
     }
 
+    /// Try to take a step only on concrete values.  Returs `false` if
+    /// `rule_step` panics or one of the input registers is not a
+    /// constant. On loads, it can still sneak symbolic values from
+    /// memory into registers. On failure, the proof state remains
+    /// unchanged.
+    pub fn try_rule_step_concrete(&mut self) -> Result<(),String> {
+        let instr = self.fetch_instr();
+        let x = self.reg_value(instr.r1);
+        let y = self.operand_value(instr.op2);
+	
+	if x.is_const() && y.is_const(){
+	    return self.try_rule_step()
+	} else {
+	    return Err(format!("Concrete step failed for instr {:?}. With r1({:?})= {:?} and r2({:?}) {:?}", instr, instr.r1, x, instr.op2, y))
+	}
+    }
     /// Handle a conditional jump (`Opcode::Cjmp` or `Opcode::Cnjmp`), taking the jump if `taken`
     /// is set and falling through otherwise.  There must be a `Prop` in scope (either in the
     /// current scope or an outer scope) showing that the jump condition will result in the

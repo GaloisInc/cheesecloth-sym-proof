@@ -241,20 +241,22 @@ impl MemMap {
     }
 
     pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
+        match self.load_concrete_splice(w, addr) {
+            Ok(result_word) => return Ok(Term::const_(result_word)),
+            Err(_) => {},
+        }
+	
         // We currently require the load to match a store exactly, so each consecutive address must
         // contain the next consecutive byte in order (starting from zero), and all bytes should be
         // extracted from the same expression.
-	// UNLESS the stored value is concrete, so we can just splice it as normal.
+        // UNLESS the stored value is concrete, so we can just splice it as normal.
         let val = match self.m.get(&addr) {
             Some(&(t, offset)) => {
-		if offset != 0 {
+                if offset != 0 {
                     // Require t to be concrete
-		    match t.as_const() {
-			Some(t_const) => return Ok(Term::const_(extract_subword(t_const, w.bytes(), offset))),
-			None => 
-			    return Err(format!("NYI: load requires splicing bytes: \
-						at 0x{:x}, got offset {}, but expected 0", addr, offset)),
-		    }
+                    return Err(format!("NYI: load requires splicing bytes when not concrete: \
+                        at 0x{:x}, got offset {}, but expected 0. Symbolic term: {:?}",
+                        addr, offset, t))
                 }
                 t
             },
@@ -291,6 +293,37 @@ impl MemMap {
         }
 
         Ok(val)
+    }
+
+    /// Try to load concrete values from the memory.
+    fn load_concrete_splice(&self, w: MemWidth, addr: Word) -> Result<Word, String> {
+        // Initialize the result word
+        let mut result_word: u64 = 0;
+        let mut byte: u64 = 0;
+
+        for offset in 0 .. w.bytes() {
+            match self.m.get(&(addr + offset)) {
+                Some(&(t, loaded_offset)) => {
+                    // Require t to be concrete
+                    match t.as_const() {
+                        Some(val) => {
+                            byte = (val >> (loaded_offset * 8)) & (0xFF);
+                            result_word = result_word | (byte << offset * 8) as u64
+                        },
+                        None =>
+                            return Err(format!("Loaded values are not concrete: \
+                                at 0x{:x}, got offset {}, but expected 0. Symbolic term: {:?}",
+                                addr, offset, t)),
+                    }
+                },
+                None => {
+                    return Err(format!("failed to load from address 0x{:x}: uninitialized data",
+                        addr + offset));
+                },
+            }
+        }
+
+        Ok(result_word)
     }
 }
 
