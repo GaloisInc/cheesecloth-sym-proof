@@ -4,6 +4,7 @@
 use std::mem;
 
 
+pub mod advice;
 pub mod micro_ram;
 pub mod kernel;
 pub mod logic;
@@ -17,8 +18,47 @@ pub const WORD_BYTES: Word = mem::size_of::<Word>() as Word;
 pub const WORD_BITS: Word = WORD_BYTES * 8;
 pub type Addr = Word;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum BinOp {
+
+macro_rules! define_bin_op {
+    ($($Variant:ident,)*) => {
+        #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+        pub enum BinOp {
+            $($Variant,)*
+        }
+
+        impl BinOp {
+            pub const COUNT: u8 = 0 $(+ { let _ = Self::$Variant; 1 })*;
+
+            pub fn as_raw(self) -> u8 {
+                #![allow(unused)]
+                let mut i = 0;
+                $(
+                    if self == Self::$Variant {
+                        return i;
+                    }
+                    i += 1;
+                )*
+                unreachable!()
+            }
+
+            pub fn from_raw(raw: u8) -> Self {
+                #![allow(unused)]
+                assert!(raw < Self::COUNT, "discriminant {} is out of range", raw);
+                let mut i = raw;
+                $(
+                    if i == 0 {
+                        return Self::$Variant;
+                    }
+                    i -= 1;
+                )*
+                unreachable!()
+            }
+        }
+
+    };
+}
+
+define_bin_op! {
     And,
     Or,
     Xor,
