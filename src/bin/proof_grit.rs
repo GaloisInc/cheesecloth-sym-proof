@@ -317,7 +317,7 @@ fn run(path: &str) -> Result<(), String> {
 
     println!("ok");
 
-    #[cfg(feature = "recording_1")] {
+    #[cfg(feature = "recording_rules")] {
         advice::recording::rules::Tag.record(&Rule::Done);
     }
     advice::finish()?;

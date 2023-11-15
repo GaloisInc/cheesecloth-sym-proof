@@ -62,14 +62,14 @@ macro_rules! require_eq {
 }
 
 
-#[cfg(feature = "recording_1")]
+#[cfg(any(feature = "recording_rules", feature = "recording_term_index"))]
 macro_rules! record {
     ($($x:expr),*) => {{
         $( advice::recording::rules::Tag.record(&$x); )*
     }};
 }
 
-#[cfg(not(feature = "recording_1"))]
+#[cfg(not(any(feature = "recording_rules", feature = "recording_term_index")))]
 macro_rules! record {
     ($($x:expr),*) => {{
     }};

@@ -735,11 +735,28 @@ fn load_file(path: impl AsRef<Path>, ps: impl PlaybackStreamTag) -> Result<(), S
 }
 
 pub fn load() -> Result<(), String> {
-    #[cfg(feature = "playback_1")] {
-        load_file("advice/terms.cbor", playback::terms::Tag)?;
-        load_file("advice/states.cbor", playback::states::Tag)?;
-        load_file("advice/props.cbor", playback::props::Tag)?;
+    #[cfg(feature = "playback_rules")] {
         load_file("advice/rules.cbor", playback::rules::Tag)?;
+        load_file("advice/props.cbor", playback::props::Tag)?;
+        load_file("advice/states.cbor", playback::states::Tag)?;
+    }
+    #[cfg(feature = "playback_terms")] {
+        load_file("advice/terms.cbor", playback::terms::Tag)?;
+    }
+    #[cfg(feature = "playback_term_table")] {
+        // TODO
+    }
+    #[cfg(feature = "playback_term_index")] {
+        // TODO
+    }
+    #[cfg(feature = "playback_term_intern_index")] {
+        // TODO
+    }
+    #[cfg(feature = "playback_avec_len")] {
+        // TODO
+    }
+    #[cfg(feature = "playback_search_index")] {
+        // TODO
     }
 
     Ok(())
@@ -754,15 +771,30 @@ fn finish_file(path: impl AsRef<Path>, rs: impl RecordingStreamTag) -> Result<()
 }
 
 pub fn finish() -> Result<(), String> {
-    // Avoid unused import warning when no features are enabled.
-    let _ = fs::create_dir_all::<&str>;
+    fs::create_dir_all("advice").map_err(|x| x.to_string())?;
 
-    #[cfg(feature = "recording_1")] {
-        fs::create_dir_all("advice").map_err(|x| x.to_string())?;
-        finish_file("advice/terms.cbor", recording::terms::Tag)?;
-        finish_file("advice/states.cbor", recording::states::Tag)?;
-        finish_file("advice/props.cbor", recording::props::Tag)?;
+    #[cfg(feature = "recording_rules")] {
         finish_file("advice/rules.cbor", recording::rules::Tag)?;
+        finish_file("advice/props.cbor", recording::props::Tag)?;
+        finish_file("advice/states.cbor", recording::states::Tag)?;
+    }
+    #[cfg(feature = "recording_terms")] {
+        finish_file("advice/terms.cbor", recording::terms::Tag)?;
+    }
+    #[cfg(feature = "recording_term_table")] {
+        // TODO
+    }
+    #[cfg(feature = "recording_term_index")] {
+        // TODO
+    }
+    #[cfg(feature = "recording_term_intern_index")] {
+        // TODO
+    }
+    #[cfg(feature = "recording_avec_len")] {
+        // TODO
+    }
+    #[cfg(feature = "recording_search_index")] {
+        // TODO
     }
 
     Ok(())
