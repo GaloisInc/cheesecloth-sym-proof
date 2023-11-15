@@ -8,6 +8,7 @@ use std::mem;
 
 pub mod advice;
 pub mod micro_ram;
+pub mod interp;
 pub mod kernel;
 pub mod logic;
 pub mod symbolic;

@@ -4,6 +4,8 @@ use std::iter;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use crate::{Word, Addr};
+use crate::advice::{self, RecordingStreamTag};
+use crate::interp::{Rule, ReachRule};
 use crate::logic::{Prop, Term, Binder, VarCounter, ReachableProp, StatePred};
 use crate::logic::print::{Print, Printer, DisplayWithPrinter};
 use crate::logic::rename_vars::RenameVarsExt;
@@ -57,6 +59,20 @@ macro_rules! require_eq {
             stringify!($y),
         )
     };
+}
+
+
+#[cfg(feature = "recording_1")]
+macro_rules! record {
+    ($($x:expr),*) => {{
+        $( advice::recording::rules::Tag.record(&$x); )*
+    }};
+}
+
+#[cfg(not(feature = "recording_1"))]
+macro_rules! record {
+    ($($x:expr),*) => {{
+    }};
 }
 
 
@@ -273,6 +289,7 @@ impl<'a> Proof<'a> {
 
 
     pub fn rule_admit(&mut self, prop: Prop) {
+        record!(Rule::Admit, prop);
         #[cfg(feature = "verbose")] {
             println!("ADMITTED: {}", self.print(&prop));
         }
@@ -281,11 +298,13 @@ impl<'a> Proof<'a> {
 
     /// Introduce the trivial proposition `1`.
     pub fn rule_trivial(&mut self) {
+        record!(Rule::Trivial);
         self.add_prop(Prop::Nonzero(1.into()));
     }
 
     /// Duplicate a `Prop` into the innermost scope.
     pub fn rule_clone(&mut self, pid: PropId) {
+        record!(Rule::Clone, pid);
         let (s, i) = pid;
         let prop = if s == self.scopes.len() {
             self.cur.props[i].clone()
@@ -299,6 +318,7 @@ impl<'a> Proof<'a> {
     /// Swap two `Prop`s in the current scope.  This is useful for rules like `rule_reach_extend`
     /// that operate specifically on the last `Prop` in scope.
     pub fn rule_swap(&mut self, index1: usize, index2: usize) {
+        record!(Rule::Swap, index1, index2);
         require!(index1 < self.cur.props.len());
         require!(index2 < self.cur.props.len());
         self.cur.props.swap(index1, index2);
@@ -312,6 +332,7 @@ impl<'a> Proof<'a> {
         index: usize,
         args: &[Term],
     ) {
+        record!(Rule::Apply, index, args);
         let prop = self.prop(index);
         let binder = match *prop {
             Prop::Forall(ref b) => b,
@@ -342,12 +363,14 @@ impl<'a> Proof<'a> {
         premises: Box<[Prop]>,
         prove: impl FnOnce(&mut Proof),
     ) {
+        record!(Rule::ForallIntro, vars, premises);
         // Check that `conclusion` can be proved given `premises`.
         let ((), mut inner_scope) = self.enter_ex(
             vars,
             premises.clone().into(),
             |pf| {
                 prove(pf);
+                record!(Rule::Done);
             },
         );
         let vars = inner_scope.vars;
@@ -369,6 +392,7 @@ impl<'a> Proof<'a> {
         &mut self,
         f: impl FnOnce(&mut ReachProof),
     ) {
+        record!(Rule::ReachExtend);
         let last_prop = self.cur.props.pop()
             .unwrap_or_else(|| die!("there are no props in the current scope"));
         let rp = match last_prop {
@@ -404,6 +428,7 @@ impl<'a> Proof<'a> {
                     cycles: 0,
                 };
                 f(&mut rpf);
+                record!(Rule::Done);
                 (rpf.state, rpf.cycles)
             },
         );
@@ -433,6 +458,7 @@ impl<'a> Proof<'a> {
         reach_index: usize,
         new_min_cycles: Term,
     ) {
+        record!(Rule::ReachShrink, reach_index, new_min_cycles);
         let rp = match *self.prop_mut(reach_index) {
             Prop::Reachable(ref mut rp) => rp,
             _ => die!("expected prop {} to be Prop::Reachable, but got {}",
@@ -460,6 +486,7 @@ impl<'a> Proof<'a> {
         new_vars: VarCounter,
         var_map: &[Option<u32>],
     ) {
+        record!(Rule::ReachRenameVars, index, new_vars, var_map);
         let rp = match *self.prop_mut(index) {
             Prop::Reachable(ref mut rp) => rp,
             _ => die!("expected prop {} to be Prop::Reachable, but got {}",
@@ -505,6 +532,7 @@ impl<'a> Proof<'a> {
         index_zero: usize,
         index_succ: usize,
     ) {
+        record!(Rule::Induction, index_zero, index_succ);
         // Process `Hsucc` first, since it lets us infer the predicate `P`.
         let succ_prop = self.prop(index_succ);
         let succ_binder = match *succ_prop {
@@ -670,12 +698,14 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Introduce a new unconstrained variable.
     pub fn rule_var_fresh(&mut self) -> Term {
+        record!(ReachRule::VarFresh);
         self.fresh_var()
     }
 
     /// Introduce a new variable `x` and add the equality `x == t` to the context.  Returns the new
     /// variable as a `Term`.
     pub fn rule_var_eq(&mut self, t: Term) -> Term {
+        record!(ReachRule::VarEq, t);
         let x = self.fresh_var();
         self.pf.add_prop(Prop::Nonzero(Term::cmpe(x, t)));
         x
@@ -683,6 +713,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Perform one step of execution.  In some cases, this may fail due to a missing precondition.
     pub fn rule_step(&mut self) {
+        record!(ReachRule::Step);
         let instr = self.fetch_instr();
         let x = self.reg_value(instr.r1);
         let y = self.operand_value(instr.op2);
@@ -750,9 +781,12 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         let old_hook = panic::take_hook();
         panic::set_hook(Box::new(|_| {}));
 
-        let ok = panic::catch_unwind(AssertUnwindSafe(|| {
+        let f = AssertUnwindSafe(|| {
             self.rule_step();
-        })).is_ok();
+        });
+        let ok = panic::catch_unwind(|| {
+            advice::rollback_on_panic(f);
+        }).is_ok();
 
         panic::set_hook(old_hook);
 
@@ -764,6 +798,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     /// current scope or an outer scope) showing that the jump condition will result in the
     /// behavior indicated by `taken`.
     pub fn rule_step_jump(&mut self, taken: bool) {
+        record!(ReachRule::StepJump, taken);
         let instr = self.fetch_instr();
         let x = self.reg_value(instr.r1);
         let y = self.operand_value(instr.op2);
@@ -811,6 +846,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     /// Handle a load instruction by introducing a fresh variable for the result.  This gives no
     /// information about the value that was actually loaded.
     pub fn rule_step_load_fresh(&mut self) {
+        record!(ReachRule::StepLoadFresh);
         let instr = self.fetch_instr();
 
         match instr.opcode {
@@ -831,6 +867,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     /// Rewrite the value of `reg` to `new`.  Requires the premise `old == new` to be available in
     /// the context.
     pub fn rule_rewrite_reg(&mut self, reg: Reg, new: Term) {
+        record!(ReachRule::RewriteReg, reg, new);
         let old = self.reg_value(reg);
         let eq1 = Prop::Nonzero(Term::cmpe(old.clone(), new.clone()));
         let eq2 = Prop::Nonzero(Term::cmpe(old, new.clone()));
@@ -843,12 +880,14 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Replace the value of `reg` with a fresh symbolic variable.
     pub fn rule_forget_reg(&mut self, reg: Reg) {
+        record!(ReachRule::ForgetReg, reg);
         let z = self.fresh_var();
         self.set_reg(reg, z);
     }
 
     /// Forget all known facts about memory.
     pub fn rule_forget_mem(&mut self) {
+        record!(ReachRule::ForgetMem);
         self.state.mem = MemState::Log(MemLog::new());
     }
 }

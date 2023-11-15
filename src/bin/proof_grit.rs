@@ -13,6 +13,8 @@ use std::array;
 use std::env;
 use env_logger;
 use log::trace;
+use sym_proof::advice::{self, RecordingStreamTag};
+use sym_proof::interp::Rule;
 use sym_proof::kernel::Proof;
 use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred};
 use sym_proof::logic::shift::ShiftExt;
@@ -314,6 +316,12 @@ fn run(path: &str) -> Result<(), String> {
     println!("\nfinal theorem:\n{}", pf.print(&pf.props()[p_exec.1]));
 
     println!("ok");
+
+    #[cfg(feature = "recording_1")] {
+        advice::recording::rules::Tag.record(&Rule::Done);
+    }
+    advice::finish()?;
+
     Ok(())
 }
 

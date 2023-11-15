@@ -1,8 +1,11 @@
 use std::array;
 use std::convert::{TryFrom, TryInto};
 use std::collections::HashSet;
+use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::mem;
+use std::panic::{self, UnwindSafe};
+use std::path::Path;
 use serde_cbor;
 use crate::{Word, BinOp};
 use crate::logic::{Term, TermKind, VarId, VarCounter, Binder, Prop, ReachableProp, StatePred};
@@ -15,20 +18,12 @@ pub type Value = u64;
 
 pub struct RecordingStream {
     buf: Vec<Value>,
-    /// Slots in `buf` that are reserved and currently contain a placeholder value.  These must be
-    /// replaced with real values (via `resolve_deferred()`) before the recording stream is
-    /// finished.
-    deferred: HashSet<usize>,
 }
-
-#[derive(Debug)]
-pub struct DeferredIndex(usize);
 
 impl RecordingStream {
     pub fn new() -> RecordingStream {
         RecordingStream {
             buf: Vec::new(),
-            deferred: HashSet::new(),
         }
     }
 
@@ -36,25 +31,16 @@ impl RecordingStream {
         self.buf.push(v);
     }
 
-    /// Reserve the next slot in the advice stream, but defer providing a value until later.  The
-    /// returned `DeferredIndex` must be passed to `resolve_deferred` before the stream is
-    /// finished.
-    pub fn defer(&mut self) -> DeferredIndex {
-        let i = self.buf.len();
-        self.buf.push(0xbaddef);
-        self.deferred.insert(i);
-        DeferredIndex(i)
-    }
-
-    pub fn resolve_deferred(&mut self, idx: DeferredIndex, v: Value) {
-        assert!(self.deferred.remove(&idx.0), "slot {:?} already contains a value", idx);
-        self.buf[idx.0] = v;
-    }
-
     pub fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
-        assert!(self.deferred.len() == 0,
-            "must resolve all deferred values before calling finish(): {:?}", self.deferred);
         serde_cbor::to_writer(w, &self.buf)
+    }
+
+    fn snapshot(&self) -> usize {
+        self.buf.len()
+    }
+
+    fn rewind(&mut self, snap: usize) {
+        self.buf.truncate(snap);
     }
 }
 
@@ -69,19 +55,11 @@ pub trait RecordingStreamTag: Sized + Copy {
         self.put(v.try_into().ok().unwrap());
     }
 
-    fn defer(self) -> DeferredIndex {
-        self.with(|rs| rs.defer())
-    }
-
-    fn resolve_deferred(self, idx: DeferredIndex, v: Value) {
-        self.with(|rs| rs.resolve_deferred(idx, v))
-    }
-
     fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         self.with(|rs| mem::replace(rs, RecordingStream::new()).finish(w))
     }
 
-    fn record<T: Record>(self, x: &T) {
+    fn record<T: Record + ?Sized>(self, x: &T) {
         x.record_into(self);
     }
 }
@@ -199,11 +177,11 @@ macro_rules! playback_stream {
 }
 
 
-pub trait Record {
+pub trait Record: std::fmt::Debug {
     fn record_into(&self, rs: impl RecordingStreamTag);
 }
 
-pub trait Playback {
+pub trait Playback: std::fmt::Debug {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self;
 }
 
@@ -218,7 +196,11 @@ macro_rules! impl_record_playback_for_primitive {
 
         impl Playback for $T {
             fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-                ps.take_cast()
+                if let Ok(max) = Value::try_from(<$T>::MAX) {
+                    ps.take_bounded_cast(max)
+                } else {
+                    ps.take_cast()
+                }
             }
         }
     };
@@ -230,22 +212,34 @@ impl_record_playback_for_primitive!(u32);
 impl_record_playback_for_primitive!(u64);
 impl_record_playback_for_primitive!(usize);
 
-
-impl<T: Record> Record for &'_ T {
+impl Record for bool {
     fn record_into(&self, rs: impl RecordingStreamTag) {
-        T::record_into(self, rs);
+        rs.put_cast(*self);
     }
 }
 
-impl<T: Record> Record for Box<T> {
+impl Playback for bool {
+    fn playback_from(ps: impl PlaybackStreamTag) -> Self {
+        ps.take_bounded(1) != 0
+    }
+}
+
+
+impl<T: Record + ?Sized> Record for &'_ T {
     fn record_into(&self, rs: impl RecordingStreamTag) {
-        T::record_into(self, rs);
+        rs.record::<T>(self)
+    }
+}
+
+impl<T: Record + ?Sized> Record for Box<T> {
+    fn record_into(&self, rs: impl RecordingStreamTag) {
+        rs.record::<T>(self)
     }
 }
 
 impl<T: Playback> Playback for Box<T> {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        Box::new(T::playback_from(ps))
+        Box::new(ps.playback::<T>())
     }
 }
 
@@ -259,21 +253,15 @@ impl<T: Record> Record for [T] {
     }
 }
 
-impl<T: Record> Record for Box<[T]> {
-    fn record_into(&self, rs: impl RecordingStreamTag) {
-        <[T]>::record_into(self, rs);
-    }
-}
-
 impl<T: Playback> Playback for Box<[T]> {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        <Vec<T>>::playback_from(ps).into_boxed_slice()
+        ps.playback::<Vec<T>>().into_boxed_slice()
     }
 }
 
 impl<T: Record> Record for Vec<T> {
     fn record_into(&self, rs: impl RecordingStreamTag) {
-        <[T]>::record_into(self, rs);
+        rs.record::<[T]>(self)
     }
 }
 
@@ -282,16 +270,47 @@ impl<T: Playback> Playback for Vec<T> {
         let len = ps.playback::<usize>();
         let mut v = Vec::with_capacity(len);
         for _ in 0 .. len {
-            v.push(T::playback_from(ps));
+            v.push(ps.playback::<T>());
         }
         v
     }
 }
 
 
+impl<T: Record> Record for Option<T> {
+    fn record_into(&self, rs: impl RecordingStreamTag) {
+        match *self {
+            None => {
+                rs.put(0);
+            },
+            Some(ref x) => {
+                rs.put(1);
+                rs.record::<T>(x);
+            },
+        }
+    }
+}
+
+impl<T: Playback> Playback for Option<T> {
+    fn playback_from(ps: impl PlaybackStreamTag) -> Self {
+        match ps.take_bounded(1) {
+            0 => None,
+            1 => {
+                let x = ps.playback::<T>();
+                Some(x)
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+
+
 impl<T: Record, const N: usize> Record for [T; N] {
     fn record_into(&self, rs: impl RecordingStreamTag) {
-        <[T]>::record_into(self, rs);
+        // Don't go through `record::<[T]>` since we don't need a length prefix.
+        for x in self {
+            rs.record::<T>(x);
+        }
     }
 }
 
@@ -311,7 +330,7 @@ macro_rules! impl_record_playback_for_tuple {
             fn record_into(&self, rs: impl RecordingStreamTag) {
                 #![allow(bad_style)]
                 let ($(ref $A,)*) = *self;
-                $( $A::record_into($A, rs); )*
+                $( rs.record::<$A>($A); )*
             }
         }
 
@@ -320,7 +339,7 @@ macro_rules! impl_record_playback_for_tuple {
             #[allow(unused)]
             fn playback_from(ps: impl PlaybackStreamTag) -> Self {
                 #![allow(bad_style)]
-                $( let $A = $A::playback_from(ps); )*
+                $( let $A = ps.playback::<$A>(); )*
                 ($($A,)*)
             }
         }
@@ -369,14 +388,14 @@ impl Playback for VarCounter {
 impl<T: Record> Record for Binder<T> {
     fn record_into(&self, rs: impl RecordingStreamTag) {
         rs.record(&self.vars);
-        T::record_into(&self.inner, rs);
+        rs.record::<T>(&self.inner);
     }
 }
 
 impl<T: Playback> Playback for Binder<T> {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
         let vars = ps.playback::<VarCounter>();
-        let inner = T::playback_from(ps);
+        let inner = ps.playback::<T>();
         Binder::from_parts(vars, inner)
     }
 }
@@ -696,10 +715,77 @@ pub mod recording {
     recording_stream!(terms);
     recording_stream!(states);
     recording_stream!(props);
+    recording_stream!(rules);
 }
 
 pub mod playback {
     playback_stream!(terms);
     playback_stream!(states);
     playback_stream!(props);
+    playback_stream!(rules);
+}
+
+
+fn load_file(path: impl AsRef<Path>, ps: impl PlaybackStreamTag) -> Result<(), String> {
+    let path = path.as_ref();
+    let f = File::open(path).map_err(|x| x.to_string())?;
+    ps.load(f).map_err(|x| x.to_string())?;
+    eprintln!("loaded advice: {path:?}");
+    Ok(())
+}
+
+pub fn load() -> Result<(), String> {
+    #[cfg(feature = "playback_1")] {
+        load_file("advice/terms.cbor", playback::terms::Tag)?;
+        load_file("advice/states.cbor", playback::states::Tag)?;
+        load_file("advice/props.cbor", playback::props::Tag)?;
+        load_file("advice/rules.cbor", playback::rules::Tag)?;
+    }
+
+    Ok(())
+}
+
+fn finish_file(path: impl AsRef<Path>, rs: impl RecordingStreamTag) -> Result<(), String> {
+    let path = path.as_ref();
+    let f = File::create(path).map_err(|x| x.to_string())?;
+    rs.finish(f).map_err(|x| x.to_string())?;
+    eprintln!("saved advice: {path:?}");
+    Ok(())
+}
+
+pub fn finish() -> Result<(), String> {
+    // Avoid unused import warning when no features are enabled.
+    let _ = fs::create_dir_all::<&str>;
+
+    #[cfg(feature = "recording_1")] {
+        fs::create_dir_all("advice").map_err(|x| x.to_string())?;
+        finish_file("advice/terms.cbor", recording::terms::Tag)?;
+        finish_file("advice/states.cbor", recording::states::Tag)?;
+        finish_file("advice/props.cbor", recording::props::Tag)?;
+        finish_file("advice/rules.cbor", recording::rules::Tag)?;
+    }
+
+    Ok(())
+}
+
+
+macro_rules! rollback_on_panic_body {
+    ($f:expr; $($stream:ident),*) => {{
+        $( let $stream = recording::$stream::Tag.with(|rs| rs.snapshot()); )*
+        let r = panic::catch_unwind($f);
+        match r {
+            Ok(x) => x,
+            Err(e) => {
+                $( recording::$stream::Tag.with(|rs| rs.rewind($stream)); )*
+                panic::resume_unwind(e);
+            },
+        }
+    }};
+}
+
+pub fn rollback_on_panic<F: FnOnce() -> R + UnwindSafe, R>(f: F) -> R {
+    rollback_on_panic_body!(
+        f;
+        terms, states, props, rules
+    )
 }
