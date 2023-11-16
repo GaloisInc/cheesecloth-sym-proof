@@ -131,6 +131,7 @@ mod imp_prealloc {
     use bumpalo::Bump;
     use crate::{Word, BinOp};
     use crate::advice;
+    #[allow(unused)] use crate::advice::{PlaybackStreamTag, RecordingStreamTag};
     use crate::advice::term_table::RawTermKind;
     use crate::advice::term_table::playback;
     use crate::logic::VarId;
@@ -167,7 +168,16 @@ mod imp_prealloc {
 
     impl Term {
         pub fn intern(kind: TermKind) -> Term {
-            Term(playback::get_kind(kind), PhantomData)
+            #[cfg(feature = "playback_term_intern_index")]
+            let index = advice::playback::term_intern_index::Tag.playback::<usize>();
+            #[cfg(not(feature = "playback_term_intern_index"))]
+            let index = playback::kind_to_index(kind);
+
+            #[cfg(feature = "recording_term_intern_index")] {
+                advice::recording::term_intern_index::Tag.record(&index);
+            }
+
+            Self::from_table_index(index)
         }
 
         pub fn from_table_index(index: usize) -> Term {

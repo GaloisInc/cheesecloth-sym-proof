@@ -17,6 +17,7 @@ struct Table {
     /// Table of preallocated terms.  Sub-`Term`s are represented as pointers to other elements in
     /// this table.
     terms: Box<[RawTermKind]>,
+    #[cfg(not(feature = "playback_term_intern_index"))]
     /// Map from `RawTermKind` to the position where that `RawTermKind` appears in `self.terms`.
     kind_index: HashMap<RawTermKind, usize>,
 }
@@ -42,16 +43,15 @@ pub fn get_index(index: usize) -> &'static RawTermKind {
     })
 }
 
-/// This function is **unsound**: the references returned from this function claim to be `'static`,
-/// but they actually live only as long as the thread.  It's unsafe to pass the returned reference
-/// to another thread.
-pub fn get_kind(kind: TermKind) -> &'static RawTermKind {
+// If `playback_term_intern_index` is enabled, then `Term::intern` should use advice instead of
+// calling this method.
+#[cfg(not(feature = "playback_term_intern_index"))]
+pub fn kind_to_index(kind: TermKind) -> usize {
     TABLE.with(|table| {
         let table = table.borrow();
         let raw = RawTermKind::from_term_kind(kind, |t| t.as_ptr() as usize);
-        let index = table.kind_index.get(&raw).copied()
-            .unwrap_or_else(|| panic!("failed to find {:?} ({:?}) in table", kind, raw));
-        unsafe { table.get_static(index) }
+        table.kind_index.get(&raw).copied()
+            .unwrap_or_else(|| panic!("failed to find {:?} ({:?}) in table", kind, raw))
     })
 }
 
@@ -89,11 +89,17 @@ pub fn load(r: impl Read) -> serde_cbor::Result<()> {
                 });
             }
 
-            // Now that all the `RawTermKind`s have been rewritten into their final forms, generate
-            // the the `kind_index` map.
-            let kind_index = terms.iter().enumerate().map(|(i, &raw)| (raw, i)).collect();
+            #[cfg(not(feature = "playback_term_intern_index"))] {
+                // Now that all the `RawTermKind`s have been rewritten into their final forms,
+                // generate the the `kind_index` map.
+                let kind_index = terms.iter().enumerate().map(|(i, &raw)| (raw, i)).collect();
 
-            *table = Table { terms, kind_index };
+                *table = Table { terms, kind_index };
+            }
+            #[cfg(feature = "playback_term_intern_index")] {
+                *table = Table { terms };
+            }
+
             // Once `terms` is loaded into `*table`, it's unsafe to overwrite it.
         }
 

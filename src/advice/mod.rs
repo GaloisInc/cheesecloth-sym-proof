@@ -743,6 +743,7 @@ pub mod recording {
     recording_stream!(states);
     recording_stream!(terms);
     recording_stream!(term_index);
+    recording_stream!(term_intern_index);
 }
 
 pub mod playback {
@@ -751,6 +752,7 @@ pub mod playback {
     playback_stream!(states);
     playback_stream!(terms);
     playback_stream!(term_index);
+    playback_stream!(term_intern_index);
 }
 
 
@@ -781,7 +783,7 @@ pub fn load() -> Result<(), String> {
         load_file("advice/term_index.cbor", playback::term_index::Tag)?;
     }
     #[cfg(feature = "playback_term_intern_index")] {
-        // TODO
+        load_file("advice/term_intern_index.cbor", playback::term_intern_index::Tag)?;
     }
     #[cfg(feature = "playback_avec_len")] {
         // TODO
@@ -822,7 +824,7 @@ pub fn finish() -> Result<(), String> {
         finish_file("advice/term_index.cbor", recording::term_index::Tag)?;
     }
     #[cfg(feature = "recording_term_intern_index")] {
-        // TODO
+        finish_file("advice/term_intern_index.cbor", recording::term_intern_index::Tag)?;
     }
     #[cfg(feature = "recording_avec_len")] {
         // TODO
