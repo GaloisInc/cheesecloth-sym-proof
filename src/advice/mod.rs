@@ -520,7 +520,7 @@ impl Playback for Term {
             let rs = playback::term_index::Tag;
             let bound = term_table::playback::len();
             let index = rs.take_bounded_cast::<usize>(bound as Value);
-            return term_table::playback::get_index(index);
+            return Term::from_table_index(index);
         }
 
         panic!("no term playback mode is enabled");

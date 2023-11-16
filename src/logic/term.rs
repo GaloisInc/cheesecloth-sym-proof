@@ -122,8 +122,85 @@ mod imp_interner {
     }
 }
 
+mod imp_prealloc {
+    use std::cell::RefCell;
+    use std::collections::HashSet;
+    use std::hash::{Hash, Hasher};
+    use std::marker::PhantomData;
+    use std::mem::{self, ManuallyDrop};
+    use bumpalo::Bump;
+    use crate::{Word, BinOp};
+    use crate::advice;
+    use crate::advice::term_table::RawTermKind;
+    use crate::advice::term_table::playback;
+    use crate::logic::VarId;
+    use crate::logic::print::Printer;
+    use crate::logic::term::TermKind;
 
+
+    /// An expression producing a value of type `Word`.
+    #[derive(Copy, Clone, Debug)]
+    pub struct Term(
+        &'static RawTermKind,
+        /// Make this type `!Send` and `!Sync`, so one thread can't obtain a `Term` allocated in
+        /// a different thread's interner.
+        PhantomData<*mut u8>,
+    );
+
+    impl PartialEq for Term {
+        fn eq(&self, other: &Term) -> bool {
+            self.0 as *const RawTermKind == other.0 as *const RawTermKind
+        }
+
+        fn ne(&self, other: &Term) -> bool {
+            self.0 as *const RawTermKind != other.0 as *const RawTermKind
+        }
+    }
+
+    impl Eq for Term {}
+
+    impl Hash for Term {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            (self.0 as *const RawTermKind).hash(state)
+        }
+    }
+
+    impl Term {
+        pub fn intern(kind: TermKind) -> Term {
+            Term(playback::get_kind(kind), PhantomData)
+        }
+
+        pub fn from_table_index(index: usize) -> Term {
+            Term(playback::get_index(index), PhantomData)
+        }
+
+        /// This should only be called by `term_table::playback`.  `*raw` must be valid to pass to
+        /// `playback::term_kind_from_raw`.
+        pub unsafe fn from_raw(raw: &'static RawTermKind) -> Term {
+            Term(raw, PhantomData)
+        }
+
+        pub fn kind(&self) -> TermKind {
+            unsafe {
+                playback::term_kind_from_raw(*self.0)
+            }
+        }
+
+        /// Get a raw pointer that uniquely identifies this `Term`.
+        ///
+        /// This returns `*const ()` because the underlying pointee type may be either `TermKind`
+        /// or `RawTermKind`, depending on which `Term` implementation is in use.
+        pub fn as_ptr(&self) -> *const () {
+            self.0 as *const RawTermKind as *const ()
+        }
+    }
+}
+
+
+#[cfg(not(feature = "playback_term_table"))]
 pub use imp_interner::Term;
+#[cfg(feature = "playback_term_table")]
+pub use imp_prealloc::Term;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum TermKind {

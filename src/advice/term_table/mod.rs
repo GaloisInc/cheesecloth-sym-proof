@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::{Read, Write};
-use crate::logic::{Term, TermKind};
+use crate::BinOp;
+use crate::logic::{Term, TermKind, VarId};
 use serde::{Serialize, Deserialize};
 
 
@@ -9,8 +10,12 @@ pub mod recording;
 pub mod playback;
 
 
+/// A raw representation of a `TermKind`.  This is `repr(C)` so it can be used in secret inputs.
+///
+/// In cases where `TermKind` contains a `Term` pointer, `RawTermKind` may represent the term
+/// either as an index or as a pointer.  `recording` uses indices, while `playback` uses pointers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
-struct RawTermKind {
+pub struct RawTermKind {
     tag: usize,
     x: usize,
     y: usize,
@@ -18,44 +23,47 @@ struct RawTermKind {
 }
 
 impl RawTermKind {
-    pub const TAG_CONST: usize = 0;
-    pub const TAG_VAR: usize = 1;
-    pub const TAG_NOT: usize = 2;
-    pub const TAG_BINARY: usize = 3;
-    pub const TAG_MUX: usize = 4;
+    const TAG_CONST: usize = 0;
+    const TAG_VAR: usize = 1;
+    const TAG_NOT: usize = 2;
+    const TAG_BINARY: usize = 3;
+    const TAG_MUX: usize = 4;
 }
 
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct Table {
-    terms: Vec<RawTermKind>,
-    #[serde(skip)]
-    ptr_index: HashMap<*const (), usize>,
-    kind_index: HashMap<RawTermKind, usize>,
-}
-
-impl Table {
-    pub fn record(&mut self, t: Term) {
-        let kind = self.term_kind_to_raw(t.kind());
-        let idx = self.terms.len();
-        self.terms.push(kind);
-
-        let old = self.ptr_index.insert(t.as_ptr(), idx);
-        assert!(old.is_none(), "duplicate ptr_index entry for {:?}", t);
-
-        let old = self.kind_index.insert(kind, idx);
-        assert!(old.is_none(), "duplicate kind_index entry for {:?}", t);
-    }
-
-    pub fn term_index(&self, t: Term) -> usize {
-        match self.ptr_index.get(&t.as_ptr()) {
-            Some(&x) => x,
-            None => panic!("missing entry for {:?}", t),
+impl RawTermKind {
+    fn to_term_kind(&self, mut convert_term: impl FnMut(usize) -> Term) -> TermKind {
+        match self.tag {
+            RawTermKind::TAG_CONST => {
+                let x = self.x.try_into().unwrap();
+                TermKind::Const(x)
+            },
+            RawTermKind::TAG_VAR => {
+                let v = VarId::from_raw(self.x.try_into().unwrap());
+                TermKind::Var(v)
+            },
+            RawTermKind::TAG_NOT => {
+                let a = convert_term(self.x);
+                TermKind::Not(a)
+            },
+            RawTermKind::TAG_BINARY => {
+                let op = BinOp::from_raw(self.x.try_into().unwrap());
+                let a = convert_term(self.y);
+                let b = convert_term(self.z);
+                TermKind::Binary(op, a, b)
+            },
+            RawTermKind::TAG_MUX => {
+                let a = convert_term(self.x);
+                let b = convert_term(self.y);
+                let c = convert_term(self.z);
+                TermKind::Mux(a, b, c)
+            },
+            _ => panic!("bad tag in {:?}", self),
         }
     }
 
-    fn term_kind_to_raw(&self, tk: TermKind) -> RawTermKind {
-        let [tag, x, y, z] = match tk {
+    fn from_term_kind(kind: TermKind, mut convert_term: impl FnMut(Term) -> usize) -> RawTermKind {
+        let [tag, x, y, z] = match kind {
             TermKind::Const(x) => [
                 RawTermKind::TAG_CONST,
                 x.try_into().unwrap(),
@@ -70,44 +78,48 @@ impl Table {
             ],
             TermKind::Not(a) => [
                 RawTermKind::TAG_NOT,
-                self.term_index(a),
+                convert_term(a),
                 0,
                 0,
             ],
             TermKind::Binary(op, a, b) => [
                 RawTermKind::TAG_BINARY,
                 op.as_raw().try_into().unwrap(),
-                self.term_index(a),
-                self.term_index(b),
+                convert_term(a),
+                convert_term(b),
             ],
             TermKind::Mux(a, b, c) => [
                 RawTermKind::TAG_MUX,
-                self.term_index(a),
-                self.term_index(b),
-                self.term_index(c),
+                convert_term(a),
+                convert_term(b),
+                convert_term(c),
             ],
         };
         RawTermKind { tag, x, y, z }
     }
 
-    pub fn len(&self) -> usize {
-        self.terms.len()
-    }
-
-    pub fn get_index(&self, i: usize) -> &RawTermKind {
-        &self.terms[i]
-    }
-
-    pub fn load(&mut self, r: impl Read) -> serde_cbor::Result<()> {
-        // Don't overwrite existing entries.  The `playback` module hands out `&'static` references
-        // to its entries, and overwriting the `Vec` would invalidate them.
-        assert!(self.terms.len() == 0, "term_table is already initialized");
-        let table = serde_cbor::from_reader(r)?;
-        *self = table;
-        Ok(())
-    }
-
-    pub fn finish(&self, w: impl Write) -> serde_cbor::Result<()> {
-        serde_cbor::to_writer(w, self)
+    /// Modify all sub-`Term` pointers in-place by applying `f` to each one.
+    fn adjust_pointers(&mut self, mut f: impl FnMut(usize) -> usize) {
+        match self.tag {
+            RawTermKind::TAG_CONST => {
+                // No pointers
+            },
+            RawTermKind::TAG_VAR => {
+                // No pointers
+            },
+            RawTermKind::TAG_NOT => {
+                self.x = f(self.x);
+            },
+            RawTermKind::TAG_BINARY => {
+                self.y = f(self.y);
+                self.z = f(self.z);
+            },
+            RawTermKind::TAG_MUX => {
+                self.x = f(self.x);
+                self.y = f(self.y);
+                self.z = f(self.z);
+            },
+            _ => panic!("bad tag in {:?}", self),
+        }
     }
 }
