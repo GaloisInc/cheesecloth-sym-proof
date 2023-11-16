@@ -74,6 +74,7 @@ fn run(path: &str) -> Result<(), String> {
     println!("\nfinal theorem:\n{}", pf.print(pf.props().last().unwrap()));
 
     println!("ok");
+    advice::finish()?;
 
     Ok(())
 }

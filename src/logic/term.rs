@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use std::mem::{self, ManuallyDrop};
 use bumpalo::Bump;
 use crate::{Word, BinOp};
+use crate::advice;
 use crate::logic::VarId;
 use crate::logic::print::Printer;
 
@@ -93,7 +94,11 @@ impl Term {
                         mem::transmute::<&TermKind, &'static TermKind>(alloc)
                     };
                     interner.hash.insert(alloc);
-                    Term(alloc, PhantomData)
+                    let t = Term(alloc, PhantomData);
+                    #[cfg(feature = "recording_term_table")] {
+                        advice::term_table::recording::record(t);
+                    }
+                    t
                 },
             }
         })
@@ -101,6 +106,10 @@ impl Term {
 
     pub fn kind(&self) -> &TermKind {
         self.0
+    }
+
+    pub fn as_ptr(&self) -> *const TermKind {
+        self.0 as *const _
     }
 
     pub fn const_(x: Word) -> Term {

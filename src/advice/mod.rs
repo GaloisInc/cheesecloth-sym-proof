@@ -13,6 +13,9 @@ use crate::micro_ram::MemWidth;
 use crate::symbolic::{self, MemState, MemConcrete, MemMap, MemSnapshot, MemLog, MemMulti};
 
 
+pub mod term_table;
+
+
 pub type Value = u64;
 
 
@@ -113,7 +116,7 @@ impl PlaybackStream {
 
     pub fn take(&mut self) -> Value {
         assert!(self.inited, "tried to read from uninitialized stream");
-        assert!(self.pos < self.buf.len(), "tried to read past end of stream");
+        assert!(self.pos < self.buf.len(), "tried to read past end of stream (at {})", self.pos);
         let v = self.buf[self.pos];
         self.pos += 1;
         v
@@ -438,66 +441,89 @@ impl Playback for MemWidth {
 
 impl Record for Term {
     fn record_into(&self, _rs: impl RecordingStreamTag) {
-        let rs = recording::terms::Tag;
-        match *self.kind() {
-            TermKind::Const(x) => {
-                rs.put(0);
-                rs.record(&x);
-            },
-            TermKind::Var(v) => {
-                rs.put(1);
-                rs.record(&v);
-            },
-            TermKind::Not(a) => {
-                rs.put(2);
-                rs.record(&a);
-            },
-            TermKind::Binary(op, a, b) => {
-                rs.put(3);
-                rs.record(&op);
-                rs.record(&a);
-                rs.record(&b);
-            },
-            TermKind::Mux(a, b, c) => {
-                rs.put(4);
-                rs.record(&a);
-                rs.record(&b);
-                rs.record(&c);
-            },
+        #[cfg(feature = "recording_terms")] {
+            let rs = recording::terms::Tag;
+            match *self.kind() {
+                TermKind::Const(x) => {
+                    rs.put(0);
+                    rs.record(&x);
+                },
+                TermKind::Var(v) => {
+                    rs.put(1);
+                    rs.record(&v);
+                },
+                TermKind::Not(a) => {
+                    rs.put(2);
+                    rs.record(&a);
+                },
+                TermKind::Binary(op, a, b) => {
+                    rs.put(3);
+                    rs.record(&op);
+                    rs.record(&a);
+                    rs.record(&b);
+                },
+                TermKind::Mux(a, b, c) => {
+                    rs.put(4);
+                    rs.record(&a);
+                    rs.record(&b);
+                    rs.record(&c);
+                },
+            }
+            return;
         }
+
+        #[cfg(feature = "recording_term_index")] {
+            let rs = recording::term_index::Tag;
+            let index = term_table::recording::term_index(*self);
+            rs.put_cast(index);
+            return;
+        }
+
+        panic!("no term recording mode is enabled");
     }
 }
 
 impl Playback for Term {
     fn playback_from(_ps: impl PlaybackStreamTag) -> Self {
-        let ps = playback::terms::Tag;
-        match ps.take_bounded(4) {
-            0 => {
-                let x = ps.playback::<Word>();
-                Term::const_(x)
-            },
-            1 => {
-                let v = ps.playback::<VarId>();
-                Term::var_unchecked(v)
-            },
-            2 => {
-                let a = ps.playback::<Term>();
-                Term::not(a)
-            },
-            3 => {
-                let op = ps.playback::<BinOp>();
-                let a = ps.playback::<Term>();
-                let b = ps.playback::<Term>();
-                Term::binary(op, a, b)
-            },
-            4 => {
-                let a = ps.playback::<Term>();
-                let b = ps.playback::<Term>();
-                let c = ps.playback::<Term>();
-                Term::mux(a, b, c)
-            },
-            _ => unreachable!(),
+        #[cfg(feature = "playback_terms")] {
+            let ps = playback::terms::Tag;
+            return match ps.take_bounded(4) {
+                0 => {
+                    let x = ps.playback::<Word>();
+                    Term::const_(x)
+                },
+                1 => {
+                    let v = ps.playback::<VarId>();
+                    Term::var_unchecked(v)
+                },
+                2 => {
+                    let a = ps.playback::<Term>();
+                    Term::not(a)
+                },
+                3 => {
+                    let op = ps.playback::<BinOp>();
+                    let a = ps.playback::<Term>();
+                    let b = ps.playback::<Term>();
+                    Term::binary(op, a, b)
+                },
+                4 => {
+                    let a = ps.playback::<Term>();
+                    let b = ps.playback::<Term>();
+                    let c = ps.playback::<Term>();
+                    Term::mux(a, b, c)
+                },
+                _ => unreachable!(),
+            };
         }
+
+        #[cfg(feature = "playback_term_index")] {
+            let rs = playback::term_index::Tag;
+            let bound = term_table::playback::len();
+            let index = rs.take_bounded_cast::<usize>(bound as Value);
+            return term_table::playback::get_index(index);
+        }
+
+        panic!("no term playback mode is enabled");
     }
 }
 
@@ -712,17 +738,19 @@ impl Playback for MemMulti {
 
 
 pub mod recording {
-    recording_stream!(terms);
-    recording_stream!(states);
-    recording_stream!(props);
     recording_stream!(rules);
+    recording_stream!(props);
+    recording_stream!(states);
+    recording_stream!(terms);
+    recording_stream!(term_index);
 }
 
 pub mod playback {
-    playback_stream!(terms);
-    playback_stream!(states);
-    playback_stream!(props);
     playback_stream!(rules);
+    playback_stream!(props);
+    playback_stream!(states);
+    playback_stream!(terms);
+    playback_stream!(term_index);
 }
 
 
@@ -744,10 +772,13 @@ pub fn load() -> Result<(), String> {
         load_file("advice/terms.cbor", playback::terms::Tag)?;
     }
     #[cfg(feature = "playback_term_table")] {
-        // TODO
+        let path = "advice/term_table.cbor";
+        let f = File::open(path).map_err(|x| x.to_string())?;
+        term_table::playback::load(f).map_err(|x| x.to_string())?;
+        eprintln!("loaded advice: {path:?}");
     }
     #[cfg(feature = "playback_term_index")] {
-        // TODO
+        load_file("advice/term_index.cbor", playback::term_index::Tag)?;
     }
     #[cfg(feature = "playback_term_intern_index")] {
         // TODO
@@ -782,10 +813,13 @@ pub fn finish() -> Result<(), String> {
         finish_file("advice/terms.cbor", recording::terms::Tag)?;
     }
     #[cfg(feature = "recording_term_table")] {
-        // TODO
+        let path = "advice/term_table.cbor";
+        let f = File::create(path).map_err(|x| x.to_string())?;
+        term_table::recording::finish(f).map_err(|x| x.to_string())?;
+        eprintln!("saved advice: {path:?}");
     }
     #[cfg(feature = "recording_term_index")] {
-        // TODO
+        finish_file("advice/term_index.cbor", recording::term_index::Tag)?;
     }
     #[cfg(feature = "recording_term_intern_index")] {
         // TODO
