@@ -30,7 +30,7 @@ impl RawTermKind {
 struct Table {
     terms: Vec<RawTermKind>,
     #[serde(skip)]
-    ptr_index: HashMap<*const TermKind, usize>,
+    ptr_index: HashMap<*const (), usize>,
     kind_index: HashMap<RawTermKind, usize>,
 }
 
