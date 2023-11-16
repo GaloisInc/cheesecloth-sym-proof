@@ -104,8 +104,8 @@ impl Term {
         })
     }
 
-    pub fn kind(&self) -> &TermKind {
-        self.0
+    pub fn kind(&self) -> TermKind {
+        *self.0
     }
 
     pub fn as_ptr(&self) -> *const TermKind {
@@ -121,14 +121,14 @@ impl Term {
     }
 
     pub fn as_const(&self) -> Option<Word> {
-        match *self.kind() {
+        match self.kind() {
             TermKind::Const(x) => Some(x),
             _ => None,
         }
     }
 
     pub fn as_const_or_err(&self) -> Result<Word, String> {
-        match *self.kind() {
+        match self.kind() {
             TermKind::Const(x) => Ok(x),
             ref t => Err(format!("expected const, but got {}", Printer::new(0).display(t))),
         }
@@ -141,7 +141,7 @@ impl Term {
     }
 
     pub fn as_var(&self) -> Option<VarId> {
-        match *self.kind() {
+        match self.kind() {
             TermKind::Var(v) => Some(v),
             _ => None,
         }
@@ -172,7 +172,7 @@ impl Term {
                     if bc == 0 {
                         return a;
                     }
-                    if let TermKind::Binary(BinOp::Add, x, y) = *a.kind() {
+                    if let TermKind::Binary(BinOp::Add, x, y) = a.kind() {
                         if let Some(yc) = y.as_const() {
                             return Term::add(x, Term::const_(bc.wrapping_add(yc)));
                         }
@@ -198,7 +198,7 @@ impl Term {
                     if bc == 0 {
                         return Term::const_(0);
                     }
-                    if let TermKind::Binary(BinOp::Add, x, y) = *a.kind() {
+                    if let TermKind::Binary(BinOp::Add, x, y) = a.kind() {
                         if x.is_const() || y.is_const() {
                             return Term::add(
                                 Term::mull(x, b),
@@ -247,7 +247,7 @@ impl Term {
     /// Build the term `a + n`.  If `a` has the form `b + m` where `m` is a constant, this folds
     /// the two additions together into `b + (n + m)`.
     pub fn increment(a: Term, n: Word) -> Term {
-        if let TermKind::Binary(BinOp::Add, b, m) = *a.kind() {
+        if let TermKind::Binary(BinOp::Add, b, m) = a.kind() {
             if let Some(m) = m.as_const() {
                 return Term::add(b, Term::const_(n + m));
             }
@@ -256,7 +256,7 @@ impl Term {
     }
 
     pub fn as_var_plus_const(&self) -> Option<(VarId, Word)> {
-        match *self.kind() {
+        match self.kind() {
             TermKind::Var(v) => Some((v, 0)),
             TermKind::Binary(BinOp::Add, x, y) => {
                 let v = x.as_var()?;
@@ -271,7 +271,7 @@ impl Term {
     /// or `Some(x)` to break out; in the latter case, the return value of `for_each_var` will also
     /// be `Some(x)`.
     pub fn for_each_var<T>(&self, f: &mut impl FnMut(VarId) -> Option<T>) -> Option<T> {
-        match *self.kind() {
+        match self.kind() {
             TermKind::Const(_) => None,
             TermKind::Var(v) => {
                 f(v)

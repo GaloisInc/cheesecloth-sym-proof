@@ -443,7 +443,7 @@ impl Record for Term {
     fn record_into(&self, _rs: impl RecordingStreamTag) {
         #[cfg(feature = "recording_terms")] {
             let rs = recording::terms::Tag;
-            match *self.kind() {
+            match self.kind() {
                 TermKind::Const(x) => {
                     rs.put(0);
                     rs.record(&x);

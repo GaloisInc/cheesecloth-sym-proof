@@ -36,7 +36,7 @@ struct Table {
 
 impl Table {
     pub fn record(&mut self, t: Term) {
-        let kind = self.term_kind_to_raw(*t.kind());
+        let kind = self.term_kind_to_raw(t.kind());
         let idx = self.terms.len();
         self.terms.push(kind);
 

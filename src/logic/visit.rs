@@ -17,7 +17,7 @@ pub fn default_visit_var_id<F: Visitor + ?Sized>(_f: &mut F, _x: VarId) {
 }
 
 pub fn default_visit_term<F: Visitor + ?Sized>(f: &mut F, x: &Term) {
-    match *x.kind() {
+    match x.kind() {
         TermKind::Const(_x) => {},
         TermKind::Var(v) => v.visit_with(f),
         TermKind::Not(t) => t.visit_with(f),
