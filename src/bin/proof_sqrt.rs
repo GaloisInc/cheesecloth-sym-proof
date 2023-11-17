@@ -55,10 +55,12 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
 
     let mut conc_state = init_state;
-    // Concrete execution until label LBB831_734#20819 which is near the loop.
-    let loop_label = ".LBB831_734#20819";
-    let loop_addr = exec.labels[loop_label];
-    eprintln!("Starting concrete execution until label: {}, address: {} ", loop_label, loop_addr);
+    // LBB831_734#20819 (pc=253846) is near the loop, but slighly after the start.
+    let loop_label = ".LBB831_734#20819"; //What about .LBB713_45#19734
+    // The loop starts at pc = 253854;
+    let loop_addr = 253854; //
+    //let loop_addr = exec.labels[loop_label];
+    eprintln!("Starting concrete execution until address: {} ", loop_addr);
     while conc_state.pc != loop_addr {
 	let conc_pc : Addr = conc_state.pc;
         let instr = prog[conc_pc];
@@ -154,23 +156,7 @@ fn run(path: &str) -> Result<(), String> {
 	}
 	    
     }
-
     
-    
-    // Run concretely: 8 steps to the start of the loop, then 11 more steps to run the first
-    // iteration up to the condition check.  The loop is structured as a do/while, so the condition
-    // check comes at the end.
-    for _ in 0 .. 8 + 11 {
-        let instr = prog[conc_state.pc];
-        eprintln!("run concrete [{}]: {:?}", conc_state.pc, instr);
-        conc_state.step(instr, None);
-    }
-
-    eprintln!("concrete registers:");
-    for (i, &x) in conc_state.regs.iter().enumerate() {
-        eprintln!("{:2}: 0x{:x}", i, x);
-    }
-
     // ----------------------------------------
     // Set up the proof state
     // ----------------------------------------
@@ -244,14 +230,20 @@ fn run(path: &str) -> Result<(), String> {
 
             pf.tactic_reach_extend(p_reach, |rpf| {
                 //rpf.show_context();
-                //rpf.show_state();
 
                 // Symbolic execution through one iteration of the loop.
+
 		
+                // eprintln!("0. Run concretely until the jump point. pc {}, cycle {:?}",
+		// 	  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
+                // rpf.tactic_run_until(253854);
+		// eprintln!("INIT STATE");
+		// rpf.show_state();
+		
+		rpf.show_state();
 		eprintln!("1. Run concretely until. pc {}, cycle {:?}",
 			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
                 rpf.tactic_run_concrete();
-		rpf.show_state();
 		
 		eprintln!("2. one symbolic step. pc {}, cycle {:?}",
 			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
@@ -277,35 +269,24 @@ fn run(path: &str) -> Result<(), String> {
 		rpf.show_state();
 
 		
-                rpf.show_context();
 		eprintln!("7. Run jump. pc {}, cycle {:?}",
 			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
-		rpf.show_state();
-		rpf.tactic_run_concrete();
 		rpf.rule_step_jump(false);
-
+		rpf.show_state();
+		
 		eprintln!("8. Run until stuck");
-		rpf.show_state();
 		rpf.tactic_run();
-		
-		eprintln!("9. Run a Jump, pc {}, cycle {:?}",
-			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
-		rpf.show_state();
-		rpf.rule_step_jump(false);
-		
-		eprintln!("10. Run until...pc {}, cycle {:?}",
-			  rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
-		rpf.show_state();
-                rpf.tactic_run_until(conc_state.pc);
 
+		rpf.show_state();
+                
                 // Erase information about memory and certain registers to make it easier to
                 // sequence this `StepProp` with itself.
-                for &r in &[11, 13, 14, 15, 32] {
-                    rpf.rule_forget_reg(r);
-                }
-                rpf.rule_forget_mem();
+                // for &r in &[11, 13, 14, 15, 32] {
+                //     rpf.rule_forget_reg(r);
+                // }
+                // rpf.rule_forget_mem();
 
-                //rpf.show_state();
+                rpf.show_state();
             });
 
             // Rename variables so the final state uses the same names as the initial state.

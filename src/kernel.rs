@@ -785,8 +785,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
                     .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
                 let dest = y.as_const_or_err()
                     .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
-                eprintln!("run {}: {:?} (Cjmp)", self.pc(), instr);
-		if cond == 0{
+                if cond == 0{
 		    self.finish_instr();
                     return ();
 		} else {
@@ -799,8 +798,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
                     .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
                 let dest = y.as_const_or_err()
                     .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
-                eprintln!("run {}: {:?} (Cjmp)", self.pc(), instr);
-		if cond != 0{
+                if cond != 0{
 		    self.finish_instr();
                     return ();
 		} else {
