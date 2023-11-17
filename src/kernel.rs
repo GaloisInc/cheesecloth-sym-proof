@@ -1,3 +1,5 @@
+use std::array;
+use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::fmt::{Display, Write as _};
 use std::iter;
@@ -260,7 +262,7 @@ impl<'a> Proof<'a> {
     /// Ensure that `premise` appears somewhere in the current context.  Panics if a matching
     /// `Prop` is not found.
     fn require_premise(&self, premise: &Prop) {
-        self.require_premise_one_of([premise]);
+        self.require_premise_one_of([&|| Cow::Borrowed(premise)]);
     }
 
     /// Ensure the context contains some `Prop` for which `f(prop)` returns true.  `Prop`s from
@@ -269,7 +271,13 @@ impl<'a> Proof<'a> {
     ///
     /// `desc` is a human-readable description of what `f` was searching for, used for error
     /// messages.
-    fn require_premise_one_of<const N: usize>(&self, premises: [&Prop; N]) {
+    fn require_premise_one_of<'b, const N: usize>(
+        &self,
+        premises: [&dyn Fn() -> Cow<'b, Prop>; N],
+    ) {
+        let premises: [Cow<Prop>; N] = array::from_fn(|i| premises[i]());
+        let premises: [&Prop; N] = array::from_fn(|i| &*premises[i]);
+
         let check = |prop, shift_amount| {
             for &expect_prop in premises.iter() {
                 if expect_prop.eq_shifted(prop, shift_amount) {
@@ -488,10 +496,11 @@ impl<'a> Proof<'a> {
                 reach_index, self.print(self.prop(reach_index))),
         };
         let old_min_cycles = mem::replace(&mut rp.min_cycles, new_min_cycles);
-        let prop_ae = Prop::Nonzero(Term::cmpae(old_min_cycles.clone(), new_min_cycles.clone()));
-        let prop_a = Prop::Nonzero(Term::cmpa(old_min_cycles.clone(), new_min_cycles.clone()));
-        let prop_e = Prop::Nonzero(Term::cmpe(old_min_cycles.clone(), new_min_cycles.clone()));
-        self.require_premise_one_of([&prop_ae, &prop_a, &prop_e]);
+        self.require_premise_one_of([
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpae(old_min_cycles, new_min_cycles))),
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpa(old_min_cycles, new_min_cycles))),
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpe(old_min_cycles, new_min_cycles))),
+        ]);
         self.check_updated_prop(reach_index);
     }
 
@@ -888,9 +897,10 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     pub fn rule_rewrite_reg(&mut self, reg: Reg, new: Term) {
         record!(ReachRule::RewriteReg, reg, new);
         let old = self.reg_value(reg);
-        let eq1 = Prop::Nonzero(Term::cmpe(old.clone(), new.clone()));
-        let eq2 = Prop::Nonzero(Term::cmpe(old, new.clone()));
-        self.require_premise_one_of([&eq1, &eq2]);
+        self.require_premise_one_of([
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpe(old, new))),
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpe(new, old))),
+        ]);
         self.set_reg(reg, new);
     }
 
