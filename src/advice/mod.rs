@@ -90,6 +90,100 @@ macro_rules! recording_stream {
 }
 
 
+/// Like `RecordingStream`, but the advice stream is divided into chunks.  Instead of recording
+/// values in order, the caller allocates chunks and later records values into each chunk.  When
+/// `finish` is called, the final witness stream is assembled based on the order of chunk
+/// allocation.  For example:
+///
+/// ```ignore
+/// let mut crs = ChunkedRecordingStream::new();
+/// let a = crs.add_chunk();
+/// let b = crs.add_chunk();
+/// crs.get_mut(a).put(1);
+/// crs.get_mut(b).put(2);
+/// crs.get_mut(a).put(3);
+/// crs.finish(...);
+/// ```
+///
+/// The output advice stream is `[1, 3, 2]`, since chunk `a` contains `[1, 3]` and chunk `b`
+/// contains `[2]`.
+pub struct ChunkedRecordingStream {
+    chunks: Vec<RecordingStream>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct ChunkId(usize);
+
+impl ChunkedRecordingStream {
+    pub fn new() -> ChunkedRecordingStream {
+        ChunkedRecordingStream {
+            chunks: Vec::new(),
+        }
+    }
+
+    pub fn add_chunk(&mut self) -> ChunkId {
+        let id = ChunkId(self.chunks.len());
+        self.chunks.push(RecordingStream::new());
+        id
+    }
+
+    pub fn get(&self, id: ChunkId) -> &RecordingStream {
+        &self.chunks[id.0]
+    }
+
+    pub fn get_mut(&mut self, id: ChunkId) -> &mut RecordingStream {
+        &mut self.chunks[id.0]
+    }
+
+    pub fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
+        let buf = self.chunks.iter()
+            .flat_map(|rs| rs.buf.iter().copied())
+            .collect::<Vec<_>>();
+        serde_cbor::to_writer(w, &buf)
+    }
+
+    fn snapshot(&self) -> Vec<usize> {
+        self.chunks.iter().map(|rs| rs.snapshot()).collect()
+    }
+
+    fn rewind(&mut self, snap: Vec<usize>) {
+        self.chunks.truncate(snap.len());
+        for (chunk, snap) in self.chunks.iter_mut().zip(snap.into_iter()) {
+            chunk.rewind(snap);
+        }
+    }
+}
+
+macro_rules! chunked_recording_stream {
+    ($name:ident) => {
+        pub mod $name {
+            use std::cell::RefCell;
+            use crate::advice::{
+                RecordingStream, ChunkedRecordingStream, ChunkId, RecordingStreamTag,
+            };
+
+            thread_local! {
+                static STREAM: RefCell<ChunkedRecordingStream> =
+                    RefCell::new(ChunkedRecordingStream::new());
+            }
+
+            #[derive(Clone, Copy, Debug)]
+            pub struct Tag(ChunkId);
+
+            impl RecordingStreamTag for Tag {
+                fn with<R>(self, f: impl FnOnce(&mut RecordingStream) -> R) -> R {
+                    STREAM.with(|c| f(c.borrow_mut().get_mut(self.0)))
+                }
+            }
+
+            pub fn add_chunk() -> ChunkId {
+                STREAM.with(|c| c.borrow_mut().add_chunk())
+            }
+        }
+    };
+}
+
+
 pub struct PlaybackStream {
     buf: Vec<Value>,
     pos: usize,
@@ -762,6 +856,7 @@ pub mod recording {
     recording_stream!(term_index);
     recording_stream!(term_intern_index);
     recording_stream!(search_index);
+    chunked_recording_stream!(avec);
 }
 
 pub mod playback {
@@ -772,6 +867,7 @@ pub mod playback {
     playback_stream!(term_index);
     playback_stream!(term_intern_index);
     playback_stream!(search_index);
+    playback_stream!(avec);
 }
 
 
