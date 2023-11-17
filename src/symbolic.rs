@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use crate::{Word, WORD_BYTES, Addr};
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand, Instr};
 use crate::logic::{Term, VarId, Prop};
+use crate::logic::eq_shifted::EqShifted;
 use crate::logic::fold::{Fold, Folder};
 use crate::logic::print::debug_print;
 use crate::logic::visit::{Visit, Visitor};
@@ -67,6 +68,24 @@ impl Fold for MemState {
     }
 }
 
+impl EqShifted for MemState {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        match (self, other) {
+            (&MemState::Concrete(ref m1), &MemState::Concrete(ref m2)) =>
+                m1.eq_shifted(m2, amount),
+            (&MemState::Map(ref m1), &MemState::Map(ref m2)) =>
+                m1.eq_shifted(m2, amount),
+            (&MemState::Snapshot(ref m1), &MemState::Snapshot(ref m2)) =>
+                m1.eq_shifted(m2, amount),
+            (&MemState::Log(ref m1), &MemState::Log(ref m2)) =>
+                m1.eq_shifted(m2, amount),
+            (&MemState::Multi(ref m1), &MemState::Multi(ref m2)) =>
+                m1.eq_shifted(m2, amount),
+            _ => false,
+        }
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemConcrete {
@@ -111,6 +130,14 @@ impl Fold for MemConcrete {
             m: m.clone(),
             max,
         }
+    }
+}
+
+impl EqShifted for MemConcrete {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let MemConcrete { ref m, max } = *self;
+        m.eq_shifted(&other.m, amount)
+            && max.eq_shifted(&other.max, amount)
     }
 }
 
@@ -209,6 +236,14 @@ impl Fold for MemMap {
     }
 }
 
+impl EqShifted for MemMap {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let MemMap { ref m, max } = *self;
+        m.eq_shifted(&other.m, amount)
+            && max.eq_shifted(&other.max, amount)
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemSnapshot {
@@ -239,6 +274,13 @@ impl Fold for MemSnapshot {
         MemSnapshot {
             base,
         }
+    }
+}
+
+impl EqShifted for MemSnapshot {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let MemSnapshot { base } = *self;
+        base.eq_shifted(&other.base, amount)
     }
 }
 
@@ -283,6 +325,13 @@ impl Fold for MemLog {
         MemLog {
             l: l.iter().map(|&(a, v, w)| (a.fold_with(f), v.fold_with(f), w)).collect(),
         }
+    }
+}
+
+impl EqShifted for MemLog {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let MemLog { ref l } = *self;
+        l.eq_shifted(&other.l, amount)
     }
 }
 
@@ -416,6 +465,15 @@ impl Fold for MemMulti {
                 (a1.fold_with(f), a2.fold_with(f), m.fold_with(f))
             }).collect(),
         }
+    }
+}
+
+impl EqShifted for MemMulti {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let MemMulti { ref conc, ref objs, ref sym } = *self;
+        conc.eq_shifted(&other.conc, amount)
+            && objs.eq_shifted(&other.objs, amount)
+            && sym.eq_shifted(&other.sym, amount)
     }
 }
 
@@ -640,5 +698,14 @@ impl Fold for State {
             #[cfg(feature = "debug_symbolic")]
             conc_st: None, // Should we fold through it?
         }
+    }
+}
+
+impl EqShifted for State {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let State { pc, ref regs, ref mem } = *self;
+        pc.eq_shifted(&other.pc, amount)
+            && regs.eq_shifted(&other.regs, amount)
+            && mem.eq_shifted(&other.mem, amount)
     }
 }

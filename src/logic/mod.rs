@@ -5,6 +5,7 @@ use crate::logic::subst::SubstExt;
 use crate::symbolic;
 
 
+pub mod eq_shifted;
 pub mod fold;
 pub mod print;
 pub mod rename_vars;

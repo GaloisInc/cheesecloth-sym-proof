@@ -1,5 +1,5 @@
 use std::convert::TryFrom;
-use std::fmt::Display;
+use std::fmt::{Display, Write as _};
 use std::iter;
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -7,6 +7,7 @@ use crate::{Word, Addr};
 use crate::advice::{self, RecordingStreamTag};
 use crate::interp::{Rule, ReachRule};
 use crate::logic::{Prop, Term, Binder, VarCounter, ReachableProp, StatePred};
+use crate::logic::eq_shifted::EqShifted;
 use crate::logic::print::{Print, Printer, DisplayWithPrinter};
 use crate::logic::rename_vars::RenameVarsExt;
 use crate::logic::shift::ShiftExt;
@@ -259,7 +260,7 @@ impl<'a> Proof<'a> {
     /// Ensure that `premise` appears somewhere in the current context.  Panics if a matching
     /// `Prop` is not found.
     fn require_premise(&self, premise: &Prop) {
-        self.require_premise_matching(|p| p == premise, self.print(premise));
+        self.require_premise_one_of([premise]);
     }
 
     /// Ensure the context contains some `Prop` for which `f(prop)` returns true.  `Prop`s from
@@ -268,23 +269,45 @@ impl<'a> Proof<'a> {
     ///
     /// `desc` is a human-readable description of what `f` was searching for, used for error
     /// messages.
-    fn require_premise_matching(
-        &self,
-        mut f: impl FnMut(&Prop) -> bool,
-        desc: impl Display,
-    ) {
-        if self.cur.props.iter().any(|p| f(p)) {
-            return;
-        }
+    fn require_premise_one_of<const N: usize>(&self, premises: [&Prop; N]) {
+        let check = |prop, shift_amount| {
+            for &expect_prop in premises.iter() {
+                if expect_prop.eq_shifted(prop, shift_amount) {
+                    return true;
+                }
+            }
+            false
+        };
 
-        for (i, s) in self.scopes.iter().enumerate().rev() {
-            let shift_amount = (self.scopes.len() - i) as u32;
-            if s.props.iter().any(|p| f(&p.shift_by(shift_amount))) {
+        for prop in self.cur.props.iter() {
+            if check(prop, 0) {
                 return;
             }
         }
 
-        die!("missing premise: {}", desc);
+        for (i, s) in self.scopes.iter().enumerate().rev() {
+            let shift_amount = (self.scopes.len() - i) as u32;
+            for prop in s.props.iter() {
+                if check(prop, shift_amount) {
+                    return;
+                }
+            }
+        }
+
+
+        #[cfg(feature = "verbose")] {
+            let mut desc = String::new();
+            for (i, p) in premises.iter().enumerate() {
+                if i > 0 {
+                    desc.push_str(" or ");
+                }
+                write!(desc, "{}", self.print(p)).unwrap();
+            }
+            die!("missing premise: {}", desc);
+        }
+        #[cfg(not(feature = "verbose"))] {
+            die!("missing premise");
+        }
     }
 
 
@@ -468,11 +491,7 @@ impl<'a> Proof<'a> {
         let prop_ae = Prop::Nonzero(Term::cmpae(old_min_cycles.clone(), new_min_cycles.clone()));
         let prop_a = Prop::Nonzero(Term::cmpa(old_min_cycles.clone(), new_min_cycles.clone()));
         let prop_e = Prop::Nonzero(Term::cmpe(old_min_cycles.clone(), new_min_cycles.clone()));
-        self.require_premise_matching(
-            |p| p == &prop_ae || p == &prop_a || p == &prop_e,
-            format_args!("{} or {} or {}",
-                self.print(&prop_ae), self.print(&prop_a), self.print(&prop_e)),
-        );
+        self.require_premise_one_of([&prop_ae, &prop_a, &prop_e]);
         self.check_updated_prop(reach_index);
     }
 
@@ -871,10 +890,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         let old = self.reg_value(reg);
         let eq1 = Prop::Nonzero(Term::cmpe(old.clone(), new.clone()));
         let eq2 = Prop::Nonzero(Term::cmpe(old, new.clone()));
-        self.pf.require_premise_matching(
-            |p| p == &eq1 || p == &eq2,
-            format_args!("{} or {}", self.pf.print(&eq1), self.pf.print(&eq2)),
-        );
+        self.require_premise_one_of([&eq1, &eq2]);
         self.set_reg(reg, new);
     }
 
