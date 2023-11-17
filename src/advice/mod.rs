@@ -148,8 +148,25 @@ pub trait PlaybackStreamTag: Sized + Copy {
         self.take().try_into().ok().unwrap()
     }
 
-    fn take_bounded_cast<T: TryFrom<Value>>(self, max: Value) -> T {
+    fn take_bounded_cast<T>(self, max: T) -> T
+    where T: TryFrom<Value>, Value: TryFrom<T> {
+        let max = Value::try_from(max).ok().unwrap();
         self.take_bounded(max).try_into().ok().unwrap()
+    }
+
+    fn take_index<T>(self, xs: &[T]) -> usize {
+        assert!(xs.len() > 0, "can't choose from empty list");
+        self.take_bounded_cast(xs.len() - 1)
+    }
+
+    fn take_elem<'a, T>(self, xs: &'a [T]) -> &'a T {
+        let idx = self.take_index(xs);
+        &xs[idx]
+    }
+
+    fn take_index_and_elem<'a, T>(self, xs: &'a [T]) -> (usize, &'a T) {
+        let idx = self.take_index(xs);
+        (idx, &xs[idx])
     }
 
     fn playback<T: Playback>(self) -> T {
@@ -200,7 +217,7 @@ macro_rules! impl_record_playback_for_primitive {
         impl Playback for $T {
             fn playback_from(ps: impl PlaybackStreamTag) -> Self {
                 if let Ok(max) = Value::try_from(<$T>::MAX) {
-                    ps.take_bounded_cast(max)
+                    ps.take_bounded_cast(<$T>::MAX)
                 } else {
                     ps.take_cast()
                 }
@@ -519,7 +536,7 @@ impl Playback for Term {
         #[cfg(feature = "playback_term_index")] {
             let rs = playback::term_index::Tag;
             let bound = term_table::playback::len();
-            let index = rs.take_bounded_cast::<usize>(bound as Value);
+            let index = rs.take_bounded_cast::<usize>(bound);
             return Term::from_table_index(index);
         }
 
@@ -744,6 +761,7 @@ pub mod recording {
     recording_stream!(terms);
     recording_stream!(term_index);
     recording_stream!(term_intern_index);
+    recording_stream!(search_index);
 }
 
 pub mod playback {
@@ -753,6 +771,7 @@ pub mod playback {
     playback_stream!(terms);
     playback_stream!(term_index);
     playback_stream!(term_intern_index);
+    playback_stream!(search_index);
 }
 
 
@@ -789,7 +808,7 @@ pub fn load() -> Result<(), String> {
         // TODO
     }
     #[cfg(feature = "playback_search_index")] {
-        // TODO
+        load_file("advice/search_index.cbor", playback::search_index::Tag)?;
     }
 
     Ok(())
@@ -830,7 +849,7 @@ pub fn finish() -> Result<(), String> {
         // TODO
     }
     #[cfg(feature = "recording_search_index")] {
-        // TODO
+        finish_file("advice/search_index.cbor", recording::search_index::Tag)?;
     }
 
     Ok(())
@@ -854,6 +873,6 @@ macro_rules! rollback_on_panic_body {
 pub fn rollback_on_panic<F: FnOnce() -> R + UnwindSafe, R>(f: F) -> R {
     rollback_on_panic_body!(
         f;
-        terms, states, props, rules
+        rules, props, states, terms, term_index, term_intern_index, search_index
     )
 }

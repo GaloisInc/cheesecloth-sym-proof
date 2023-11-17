@@ -6,7 +6,8 @@ use std::iter;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use crate::{Word, Addr};
-use crate::advice::{self, RecordingStreamTag};
+use crate::advice;
+#[allow(unused)] use crate::advice::{PlaybackStreamTag, RecordingStreamTag};
 use crate::interp::{Rule, ReachRule};
 use crate::logic::{Prop, Term, Binder, VarCounter, ReachableProp, StatePred};
 use crate::logic::eq_shifted::EqShifted;
@@ -259,6 +260,13 @@ impl<'a> Proof<'a> {
     }
 
 
+    fn prop_ptr(p: &Prop) -> *const () {
+        match *p {
+            Prop::Nonzero(ref t) => t.as_ptr(),
+            _ => std::ptr::null(),
+        }
+    }
+
     /// Ensure that `premise` appears somewhere in the current context.  Panics if a matching
     /// `Prop` is not found.
     fn require_premise(&self, premise: &Prop) {
@@ -275,33 +283,67 @@ impl<'a> Proof<'a> {
         &self,
         premises: [&dyn Fn() -> Cow<'b, Prop>; N],
     ) {
+        #[cfg(feature = "playback_search_index")] {
+            let ps = advice::playback::search_index::Tag;
+
+            let (k, premise_fn) = ps.take_index_and_elem(&premises);
+            let premise: Cow<Prop> = premise_fn();
+            let premise: &Prop = &*premise;
+
+            if ps.playback::<bool>() {
+                let (j, prop) = ps.take_index_and_elem(&self.cur.props);
+                require!(premise == prop,
+                    "bad advice: premise not found (j = {}, k = {})", j, k);
+            } else {
+                let (i, scope) = ps.take_index_and_elem(&self.scopes);
+                let (j, prop) = ps.take_index_and_elem(&scope.props);
+                let shift_amount = (self.scopes.len() - i) as u32;
+                require!(premise.eq_shifted(&prop, shift_amount),
+                    "bad advice: premise not found (i = {}, j = {}, k = {})", i, j, k);
+            }
+
+            return;
+        }
+
         let premises: [Cow<Prop>; N] = array::from_fn(|i| premises[i]());
         let premises: [&Prop; N] = array::from_fn(|i| &*premises[i]);
 
         let check = |prop, shift_amount| {
-            for &expect_prop in premises.iter() {
+            for (k, &expect_prop) in premises.iter().enumerate() {
                 if expect_prop.eq_shifted(prop, shift_amount) {
-                    return true;
+                    return Some(k);
                 }
             }
-            false
+            None
         };
 
-        for prop in self.cur.props.iter() {
-            if check(prop, 0) {
+        for (j, prop) in self.cur.props.iter().enumerate() {
+            if let Some(k) = check(prop, 0) {
+                #[cfg(feature = "recording_search_index")] {
+                    let rs = advice::recording::search_index::Tag;
+                    rs.record(&k);
+                    rs.record(&true);
+                    rs.record(&j);
+                }
                 return;
             }
         }
 
         for (i, s) in self.scopes.iter().enumerate().rev() {
             let shift_amount = (self.scopes.len() - i) as u32;
-            for prop in s.props.iter() {
-                if check(prop, shift_amount) {
+            for (j, prop) in s.props.iter().enumerate() {
+                if let Some(k) = check(prop, shift_amount) {
+                    #[cfg(feature = "recording_search_index")] {
+                        let rs = advice::recording::search_index::Tag;
+                        rs.record(&k);
+                        rs.record(&false);
+                        rs.record(&i);
+                        rs.record(&j);
+                    }
                     return;
                 }
             }
         }
-
 
         #[cfg(feature = "verbose")] {
             let mut desc = String::new();

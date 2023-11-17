@@ -24,29 +24,31 @@ debug_symbolic = []
 
 stage0 = [
     "recording_rules",
+    "recording_search_index",
     "recording_terms",
 ]
 stage1 = [
     "playback_rules",
+    "playback_search_index",
     "playback_terms",
     "recording_term_table",
     "recording_term_index",
 ]
 stage2 = [
     "playback_rules",
+    "playback_search_index",
     "playback_term_table",
     "playback_term_index",
     "recording_term_intern_index",
     "recording_avec_len",
-    "recording_search_index",
 ]
 stage3 = [
     "playback_rules",
+    "playback_search_index",
     "playback_term_table",
     "playback_term_index",
     "playback_term_intern_index",
     "playback_avec_len",
-    "playback_search_index",
 ]
 
 recording_rules = []

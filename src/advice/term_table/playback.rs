@@ -92,7 +92,11 @@ pub fn load(r: impl Read) -> serde_cbor::Result<()> {
             #[cfg(not(feature = "playback_term_intern_index"))] {
                 // Now that all the `RawTermKind`s have been rewritten into their final forms,
                 // generate the the `kind_index` map.
-                let kind_index = terms.iter().enumerate().map(|(i, &raw)| (raw, i)).collect();
+                let mut kind_index = HashMap::with_capacity(terms.len());
+                for (i, &raw) in terms.iter().enumerate() {
+                    let old = kind_index.insert(raw, i);
+                    assert!(old.is_none(), "duplicate entry for {:?} at index {}", raw, i);
+                }
 
                 *table = Table { terms, kind_index };
             }

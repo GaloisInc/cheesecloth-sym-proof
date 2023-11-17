@@ -31,6 +31,13 @@ a tactic), the rule and its arguments are recorded as advice.  The
 serialization of arguments as advice effectively describes how to reconstruct
 each `Prop`, `Term`, or other value that appears as a rule argument.
 
+Slice searches performed during this stage as part of a proof rule will also
+record the index where the target item was found.  We do this early because it
+allows skipping construction of some terms.  In particular, when playing back
+this advice, rules that use `require_premise_one_of` can construct only the
+premise that was actually found, rather than constructing all candidate
+premises.
+
 This stage eliminates tactics and the hardcoded proof structure, handling
 points (1) and (2).
 
@@ -39,6 +46,8 @@ points (1) and (2).
 * Writes `props`: serialized `Prop`s appearing in rule arguments.
 * Writes `states`: serialized `symbolic::State`s appearing in rule arguments.
 * Writes `terms`: serialized `Term`s appearing in rule arguments.
+* Writes `search_index`: for each search operation, contains the index where
+  the target value was found.
 
 ## Stage 1
 
@@ -68,7 +77,7 @@ advice for the remaining `Term::intern` calls.
 
 This stage handles points (3) and (5).
 
-* Reads: `rules`, `props`, `states`, `terms`
+* Reads: `rules`, `search_index`, `props`, `states`, `terms`
 * Writes `term_table`: an array containing the `TermKind`s of all `Term`s used
   in the proof.  Note this is not an advice stream (a sequence of words), but
   rather a table that can be placed in initial memory.
@@ -81,18 +90,15 @@ Here we again replay rule invocations and record additional advice.
 
 In this stage, `Term::intern` looks up terms in the preallocated `term_table`
 constructed by the previous stage and records the index where it finds each
-term for interning purposes.  Also, `AVec`s record their peak lengths and slice
-searches record the index where they find their target items.
+term for interning purposes.  Also, `AVec`s record their peak lengths.
 
 This stage handles points (4), (6), and (7).
 
-* Reads: `rules`, `props`, `states`, `term_table`, `term_index`
+* Reads: `rules`, `search_index`, `props`, `states`, `term_table`, `term_index`
 * Writes `term_intern_index`: contains an index into `term_table` where the
   result of each `Term::intern` call can be found.
 * Writes `avec_len`: contains the maximum length of each `AVec` over its
   lifetime, so the proper capacity can be allocated up front.
-* Writes `search_index`: for each search operation, contains the index where
-  the target value was found.
 
 ## Stage 3
 
@@ -100,5 +106,5 @@ This is the final zero-knowledge proof checker, which can be compiled to run in
 MicroRAM.  It reads the previously recorded advice and uses it to efficiently
 check the proof.
 
-* Reads: `rules`, `props`, `states`, `term_table`, `term_index`,
-  `term_intern_index`, `avec_len`, `search_index`
+* Reads: `rules`, `search_index`, `props`, `states`, `term_table`,
+  `term_index`, `term_intern_index`, `avec_len`
