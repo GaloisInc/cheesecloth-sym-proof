@@ -14,6 +14,7 @@ use crate::symbolic::{self, MemState, MemConcrete, MemMap, MemSnapshot, MemLog, 
 
 
 pub mod term_table;
+pub mod vec;
 
 
 pub type Value = u64;
@@ -136,8 +137,8 @@ impl ChunkedRecordingStream {
     }
 
     pub fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
-        let buf = self.chunks.iter()
-            .flat_map(|rs| rs.buf.iter().copied())
+        let buf = self.chunks.into_iter()
+            .flat_map(|rs| rs.buf.into_iter())
             .collect::<Vec<_>>();
         serde_cbor::to_writer(w, &buf)
     }
@@ -154,12 +155,31 @@ impl ChunkedRecordingStream {
     }
 }
 
+pub trait ChunkedRecordingStreamTag: Sized + Copy {
+    type ChunkTag: RecordingStreamTag;
+
+    fn with<R>(self, f: impl FnOnce(&mut ChunkedRecordingStream) -> R) -> R;
+
+    fn mk_chunk_tag(self, id: ChunkId) -> Self::ChunkTag;
+
+    fn add_chunk(self) -> Self::ChunkTag {
+        let id = self.with(|crs| crs.add_chunk());
+        self.mk_chunk_tag(id)
+    }
+
+    fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
+        self.with(|crs| mem::replace(crs, ChunkedRecordingStream::new()).finish(w))
+    }
+
+}
+
 macro_rules! chunked_recording_stream {
     ($name:ident) => {
         pub mod $name {
             use std::cell::RefCell;
             use crate::advice::{
-                RecordingStream, ChunkedRecordingStream, ChunkId, RecordingStreamTag,
+                RecordingStream, RecordingStreamTag,
+                ChunkedRecordingStream, ChunkedRecordingStreamTag, ChunkId,
             };
 
             thread_local! {
@@ -168,16 +188,27 @@ macro_rules! chunked_recording_stream {
             }
 
             #[derive(Clone, Copy, Debug)]
-            pub struct Tag(ChunkId);
+            pub struct Tag;
 
-            impl RecordingStreamTag for Tag {
-                fn with<R>(self, f: impl FnOnce(&mut RecordingStream) -> R) -> R {
-                    STREAM.with(|c| f(c.borrow_mut().get_mut(self.0)))
+            impl ChunkedRecordingStreamTag for Tag {
+                type ChunkTag = ChunkTag;
+
+                fn with<R>(self, f: impl FnOnce(&mut ChunkedRecordingStream) -> R) -> R {
+                    STREAM.with(|c| f(&mut *c.borrow_mut()))
+                }
+
+                fn mk_chunk_tag(self, id: ChunkId) -> Self::ChunkTag {
+                    ChunkTag(id)
                 }
             }
 
-            pub fn add_chunk() -> ChunkId {
-                STREAM.with(|c| c.borrow_mut().add_chunk())
+            #[derive(Clone, Copy, Debug)]
+            pub struct ChunkTag(ChunkId);
+
+            impl RecordingStreamTag for ChunkTag {
+                fn with<R>(self, f: impl FnOnce(&mut RecordingStream) -> R) -> R {
+                    STREAM.with(|c| f(c.borrow_mut().get_mut(self.0)))
+                }
             }
         }
     };
@@ -856,7 +887,7 @@ pub mod recording {
     recording_stream!(term_index);
     recording_stream!(term_intern_index);
     recording_stream!(search_index);
-    chunked_recording_stream!(avec);
+    chunked_recording_stream!(avec_len);
 }
 
 pub mod playback {
@@ -867,7 +898,7 @@ pub mod playback {
     playback_stream!(term_index);
     playback_stream!(term_intern_index);
     playback_stream!(search_index);
-    playback_stream!(avec);
+    playback_stream!(avec_len);
 }
 
 
@@ -900,11 +931,11 @@ pub fn load() -> Result<(), String> {
     #[cfg(feature = "playback_term_intern_index")] {
         load_file("advice/term_intern_index.cbor", playback::term_intern_index::Tag)?;
     }
-    #[cfg(feature = "playback_avec_len")] {
-        // TODO
-    }
     #[cfg(feature = "playback_search_index")] {
         load_file("advice/search_index.cbor", playback::search_index::Tag)?;
+    }
+    #[cfg(feature = "playback_avec_len")] {
+        load_file("advice/avec_len.cbor", playback::avec_len::Tag)?;
     }
 
     Ok(())
@@ -914,6 +945,17 @@ fn finish_file(path: impl AsRef<Path>, rs: impl RecordingStreamTag) -> Result<()
     let path = path.as_ref();
     let f = File::create(path).map_err(|x| x.to_string())?;
     rs.finish(f).map_err(|x| x.to_string())?;
+    eprintln!("saved advice: {path:?}");
+    Ok(())
+}
+
+fn finish_file_chunked(
+    path: impl AsRef<Path>,
+    crs: impl ChunkedRecordingStreamTag,
+) -> Result<(), String> {
+    let path = path.as_ref();
+    let f = File::create(path).map_err(|x| x.to_string())?;
+    crs.finish(f).map_err(|x| x.to_string())?;
     eprintln!("saved advice: {path:?}");
     Ok(())
 }
@@ -941,11 +983,11 @@ pub fn finish() -> Result<(), String> {
     #[cfg(feature = "recording_term_intern_index")] {
         finish_file("advice/term_intern_index.cbor", recording::term_intern_index::Tag)?;
     }
-    #[cfg(feature = "recording_avec_len")] {
-        // TODO
-    }
     #[cfg(feature = "recording_search_index")] {
         finish_file("advice/search_index.cbor", recording::search_index::Tag)?;
+    }
+    #[cfg(feature = "recording_avec_len")] {
+        finish_file_chunked("advice/avec_len.cbor", recording::avec_len::Tag)?;
     }
 
     Ok(())

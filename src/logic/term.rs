@@ -172,6 +172,7 @@ mod imp_prealloc {
             let index = advice::playback::term_intern_index::Tag.playback::<usize>();
             #[cfg(not(feature = "playback_term_intern_index"))]
             let index = playback::kind_to_index(kind);
+            // FIXME: in playback_term_intern_index mode, check that the TermKind matches
 
             #[cfg(feature = "recording_term_intern_index")] {
                 advice::recording::term_intern_index::Tag.record(&index);

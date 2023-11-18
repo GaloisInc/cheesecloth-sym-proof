@@ -63,17 +63,22 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
     // Set up the proof state
     // ----------------------------------------
+
+    // Load advice first, so `AVec`s inside `Proof` can find their lengths.
+    advice::load()?;
+
     let mut pf = Proof::new(prog);
 
     // TODO: add initial reach prop to `pf`
 
-    advice::load()?;
     interp::playback_proof(&mut pf, advice::playback::rules::Tag);
 
     pf.show_context();
     println!("\nfinal theorem:\n{}", pf.print(pf.props().last().unwrap()));
 
     println!("ok");
+    // Drop `Proof` so any `AVec`s inside will record their lengths.
+    drop(pf);
     advice::finish()?;
 
     Ok(())

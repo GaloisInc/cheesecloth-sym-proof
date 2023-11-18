@@ -7,6 +7,7 @@ use std::mem;
 use std::ops::{Deref, DerefMut};
 use crate::{Word, Addr};
 use crate::advice;
+use crate::advice::vec::AVec;
 #[allow(unused)] use crate::advice::{PlaybackStreamTag, RecordingStreamTag};
 use crate::interp::{Rule, ReachRule};
 use crate::logic::{Prop, Term, Binder, VarCounter, ReachableProp, StatePred};
@@ -96,7 +97,7 @@ pub struct Proof<'a> {
     /// but we can't directly refer to `Prop`s established in outer scopes.  To use those `Prop`s,
     /// the proof must first call `rule_shift`, which copies the outer `Prop` into the current
     /// scope and shifts its variables to account for the additional binders.
-    scopes: Vec<Scope>,
+    scopes: AVec<Scope>,
 
     /// The current, innermost scope.
     cur: Scope,
@@ -104,17 +105,17 @@ pub struct Proof<'a> {
 
 pub struct Scope {
     pub vars: VarCounter,
-    pub props: Vec<Prop>,
+    pub props: AVec<Prop>,
 }
 
 impl<'a> Proof<'a> {
     pub fn new(prog: Program<'a>) -> Proof<'a> {
         Proof {
             prog,
-            scopes: Vec::new(),
+            scopes: AVec::new(),
             cur: Scope {
                 vars: VarCounter::new(),
-                props: Vec::new(),
+                props: AVec::new(),
             },
         }
     }
@@ -143,7 +144,7 @@ impl<'a> Proof<'a> {
     pub fn enter<R>(
         &mut self,
         vars: VarCounter,
-        props: Vec<Prop>,
+        props: AVec<Prop>,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.enter_ex(vars, props, f).0
@@ -152,7 +153,7 @@ impl<'a> Proof<'a> {
     fn enter_ex<R>(
         &mut self,
         vars: VarCounter,
-        props: Vec<Prop>,
+        props: AVec<Prop>,
         f: impl FnOnce(&mut Self) -> R,
     ) -> (R, Scope) {
         #[cfg(feature = "verbose")] {
