@@ -195,7 +195,7 @@ fn run(path: &str) -> Result<(), String> {
             state: symbolic::State::new (
                 conc_state.pc,
                 regs,
-                MemState::Log(MemLog { l: Vec::new() }),
+                MemState::Log(MemLog { l: Vec::new().into() }),
                 Some (conc_state.clone()),
             ),
             props: vec![].into(),

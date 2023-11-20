@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use crate::{Word, WORD_BYTES, Addr};
+use crate::advice::vec::AVec;
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand, Instr};
 use crate::logic::{Term, VarId, Prop};
 use crate::logic::eq_shifted::EqShifted;
@@ -287,13 +288,13 @@ impl EqShifted for MemSnapshot {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemLog {
-    pub l: Vec<(Term, Term, MemWidth)>,
+    pub l: AVec<(Term, Term, MemWidth)>,
 }
 
 impl MemLog {
     pub fn new() -> MemLog {
         MemLog {
-            l: Vec::new(),
+            l: AVec::new(),
         }
     }
 }
@@ -346,12 +347,12 @@ impl EqShifted for MemLog {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemMulti {
     /// Memory regions with concrete bounds.  Each entry is `(start, end, mem)`.
-    pub conc: Vec<(u64, u64, MemState)>,
+    pub conc: AVec<(u64, u64, MemState)>,
     /// Memory objects with symbolic addresses but concrete sizes.  Each entry is `(start, len,
     /// mem)`.
-    pub objs: Vec<(VarId, u64, MemState)>,
+    pub objs: AVec<(VarId, u64, MemState)>,
     /// Fully symbolic memory regions.  Each entry is `(start, end, mem)`.
-    pub sym: Vec<(Term, Term, MemState)>,
+    pub sym: AVec<(Term, Term, MemState)>,
 }
 
 enum MemRegionKind {

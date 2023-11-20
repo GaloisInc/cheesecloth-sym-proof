@@ -1,4 +1,9 @@
+use std::fmt;
+use std::slice;
+use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
+
 mod imp_vec {
+    use std::iter::FromIterator;
     use std::ops::{Deref, DerefMut};
     use crate::advice::{self, ChunkedRecordingStreamTag, RecordingStreamTag};
 
@@ -80,9 +85,21 @@ mod imp_vec {
         }
     }
 
+    impl<T> FromIterator<T> for AVec<T> {
+        fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+            Self::from_vec(Vec::from_iter(iter))
+        }
+    }
+
     impl<T> From<Box<[T]>> for AVec<T> {
         fn from(x: Box<[T]>) -> AVec<T> {
             Self::from_vec(x.into())
+        }
+    }
+
+    impl<T> From<Vec<T>> for AVec<T> {
+        fn from(x: Vec<T>) -> AVec<T> {
+            Self::from_vec(x)
         }
     }
 
@@ -94,7 +111,7 @@ mod imp_vec {
 }
 
 mod imp_box {
-    use std::iter;
+    use std::iter::{self, FromIterator};
     use std::mem::{self, MaybeUninit};
     use std::ptr;
     use std::slice;
@@ -171,10 +188,26 @@ mod imp_box {
         }
     }
 
+    impl<T> FromIterator<T> for AVec<T> {
+        fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+            let mut v = AVec::new();
+            for item in iter.into_iter() {
+                v.push(item);
+            }
+            v
+        }
+    }
+
     impl<T> From<Box<[T]>> for AVec<T> {
         fn from(x: Box<[T]>) -> AVec<T> {
+            Vec::from(x).into()
+        }
+    }
+
+    impl<T> From<Vec<T>> for AVec<T> {
+        fn from(x: Vec<T>) -> AVec<T> {
             let mut v = AVec::new();
-            for item in Vec::from(x).into_iter() {
+            for item in x.into_iter() {
                 v.push(item);
             }
             v
@@ -204,3 +237,62 @@ mod imp_box {
 pub use self::imp_vec::AVec;
 #[cfg(feature = "playback_avec_len")]
 pub use self::imp_box::AVec;
+
+impl<T: Clone> Clone for AVec<T> {
+    fn clone(&self) -> Self {
+        let mut out = AVec::with_capacity(self.len());
+        for x in self {
+            out.push(x.clone());
+        }
+        out
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for AVec<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        <[T] as fmt::Debug>::fmt(self, f)
+    }
+}
+
+impl<T: PartialEq<U>, U> PartialEq<AVec<U>> for AVec<T> {
+    fn eq(&self, other: &AVec<U>) -> bool {
+        self as &[_] == other as &[_]
+    }
+}
+
+impl<T: Eq> Eq for AVec<T> {}
+
+impl<'a, T> IntoIterator for &'a AVec<T> {
+    type Item = &'a T;
+    type IntoIter = slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a mut AVec<T> {
+    type Item = &'a mut T;
+    type IntoIter = slice::IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+impl<T: Record> Record for AVec<T> {
+    fn record_into(&self, rs: impl RecordingStreamTag) {
+        rs.record::<[T]>(self)
+    }
+}
+
+impl<T: Playback> Playback for AVec<T> {
+    fn playback_from(ps: impl PlaybackStreamTag) -> Self {
+        let len = ps.playback::<usize>();
+        let mut v = AVec::with_capacity(len);
+        for _ in 0 .. len {
+            v.push(ps.playback::<T>());
+        }
+        v
+    }
+}
