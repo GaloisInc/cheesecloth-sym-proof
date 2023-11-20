@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use crate::{Word, WORD_BYTES, Addr};
+use crate::advice::map::AMap;
 use crate::advice::vec::AVec;
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand, Instr};
 use crate::logic::{Term, VarId, Prop};
@@ -147,7 +148,7 @@ impl EqShifted for MemConcrete {
 pub struct MemMap {
     /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
     /// `Term`.  The `u8` gives the index of the byte to extract in little-endian order.
-    pub m: HashMap<Addr, (Term, u8)>,
+    pub m: AMap<Addr, (Term, u8)>,
     pub max: Addr,
 }
 

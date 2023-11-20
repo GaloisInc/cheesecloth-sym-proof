@@ -13,6 +13,7 @@ use crate::micro_ram::MemWidth;
 use crate::symbolic::{self, MemState, MemConcrete, MemMap, MemSnapshot, MemLog, MemMulti};
 
 
+pub mod map;
 pub mod term_table;
 pub mod vec;
 
@@ -888,6 +889,8 @@ pub mod recording {
     recording_stream!(term_intern_index);
     recording_stream!(search_index);
     chunked_recording_stream!(avec_len);
+    chunked_recording_stream!(amap_keys);
+    recording_stream!(amap_access);
 }
 
 pub mod playback {
@@ -899,6 +902,8 @@ pub mod playback {
     playback_stream!(term_intern_index);
     playback_stream!(search_index);
     playback_stream!(avec_len);
+    playback_stream!(amap_keys);
+    playback_stream!(amap_access);
 }
 
 
@@ -936,6 +941,12 @@ pub fn load() -> Result<(), String> {
     }
     #[cfg(feature = "playback_avec_len")] {
         load_file("advice/avec_len.cbor", playback::avec_len::Tag)?;
+    }
+    #[cfg(feature = "playback_amap_keys")] {
+        load_file("advice/amap_keys.cbor", playback::amap_keys::Tag)?;
+    }
+    #[cfg(feature = "playback_amap_access")] {
+        load_file("advice/amap_access.cbor", playback::amap_access::Tag)?;
     }
 
     Ok(())
@@ -988,6 +999,12 @@ pub fn finish() -> Result<(), String> {
     }
     #[cfg(feature = "recording_avec_len")] {
         finish_file_chunked("advice/avec_len.cbor", recording::avec_len::Tag)?;
+    }
+    #[cfg(feature = "recording_amap_keys")] {
+        finish_file_chunked("advice/amap_keys.cbor", recording::amap_keys::Tag)?;
+    }
+    #[cfg(feature = "recording_amap_access")] {
+        finish_file("advice/amap_access.cbor", recording::amap_access::Tag)?;
     }
 
     Ok(())

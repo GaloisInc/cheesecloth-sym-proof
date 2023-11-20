@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
+use crate::advice::Record;
+use crate::advice::map::AMap;
 use crate::logic::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder};
 use crate::logic::shift::ShiftExt;
 use crate::micro_ram::MemWidth;
@@ -105,6 +107,24 @@ impl<K: Eq + Hash, V: EqShifted> EqShifted for HashMap<K, V> {
             return false;
         }
         for (k, v1) in self {
+            let v2 = match other.get(k) {
+                Some(x) => x,
+                None => return false,
+            };
+            if !v1.eq_shifted(v2, amount) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl<K: Ord + Record, V: EqShifted> EqShifted for AMap<K, V> {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        for (k, v1) in self.iter() {
             let v2 = match other.get(k) {
                 Some(x) => x,
                 None => return false,

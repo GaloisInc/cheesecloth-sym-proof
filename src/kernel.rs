@@ -20,53 +20,6 @@ use crate::micro_ram::{Instr, Opcode, Reg, Operand, MemWidth, Program};
 use crate::symbolic::{self, Memory, MemState, MemLog};
 
 
-#[cfg(feature = "verbose")]
-macro_rules! die {
-    ($($args:tt)*) => {
-        panic!("proof failed: {}", format_args!($($args)*))
-    };
-}
-
-#[cfg(not(feature = "verbose"))]
-macro_rules! die {
-    ($($args:tt)*) => {
-        {
-            let _ = format_args!($($args)*);
-            panic!("proof failed")
-        }
-    };
-}
-
-// TODO: microram version, which just triggers an assertion fail and doesn't panic
-
-
-macro_rules! require {
-    ($cond:expr) => {
-        require!($cond, stringify!($cond))
-    };
-    ($cond:expr, $($args:tt)*) => {
-        if !$cond {
-            die!($($args)*);
-        }
-    };
-}
-
-macro_rules! require_eq {
-    ($x:expr, $y:expr) => {
-        require!($x == $y)
-    };
-    ($x:expr, $y:expr, $($args:tt)*) => {
-        require!(
-            $x == $y,
-            "{} (when checking {} == {})",
-            format_args!($($args)*),
-            stringify!($x),
-            stringify!($y),
-        )
-    };
-}
-
-
 #[cfg(any(feature = "recording_rules", feature = "recording_term_index"))]
 macro_rules! record {
     ($($x:expr),*) => {{

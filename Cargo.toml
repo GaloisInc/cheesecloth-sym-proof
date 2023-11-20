@@ -33,14 +33,18 @@ stage1 = [
     "playback_terms",
     "recording_term_table",
     "recording_term_index",
+    "recording_avec_len",
+    "recording_amap_keys",
 ]
 stage2 = [
     "playback_rules",
     "playback_search_index",
     "playback_term_table",
     "playback_term_index",
+    "playback_avec_len",
+    "playback_amap_keys",
     "recording_term_intern_index",
-    "recording_avec_len",
+    "recording_amap_access",
 ]
 stage3 = [
     "playback_rules",
@@ -49,6 +53,8 @@ stage3 = [
     "playback_term_index",
     "playback_term_intern_index",
     "playback_avec_len",
+    "playback_amap_keys",
+    "playback_amap_access",
 ]
 
 recording_rules = []
@@ -61,7 +67,11 @@ recording_term_index = []
 playback_term_index = []
 recording_term_intern_index = []
 playback_term_intern_index = []
-recording_avec_len = []
-playback_avec_len = []
 recording_search_index = []
 playback_search_index = []
+recording_avec_len = []
+playback_avec_len = []
+recording_amap_keys = []
+playback_amap_keys = []
+recording_amap_access = []
+playback_amap_access = []
