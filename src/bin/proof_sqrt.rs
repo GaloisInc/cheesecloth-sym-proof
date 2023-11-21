@@ -15,6 +15,8 @@ use std::env;
 use env_logger;
 use log::trace;
 use sym_proof::{Word, Addr};
+use sym_proof::advice::{self, RecordingStreamTag};
+use sym_proof::interp::Rule;
 use sym_proof::kernel::Proof;
 use sym_proof::logic::{Term, TermKind, Prop, Binder, VarCounter, ReachableProp, StatePred};
 use sym_proof::logic::shift::ShiftExt;
@@ -589,6 +591,11 @@ fn run(path: &str) -> Result<(), String> {
     println!("Final theorem:\n{}", pf.print(&pf.props()[p_exec.1]));
     println!("============\n");
     println!("Ok: Proof verified");
+
+    #[cfg(feature = "recording_rules")] {
+        advice::recording::rules::Tag.record(&Rule::Done);
+    }
+    advice::finish()?;
 
     Ok(())
 }

@@ -1,3 +1,4 @@
+use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 
 
 mod imp_btree {
@@ -312,3 +313,27 @@ mod imp_box {
 pub use self::imp_btree::AMap;
 #[cfg(feature = "playback_amap_keys")]
 pub use self::imp_box::AMap;
+
+
+impl<K: Record, V: Record> Record for AMap<K, V> {
+    fn record_into(&self, rs: impl RecordingStreamTag) {
+        rs.record(&self.len());
+        for (k, v) in self.iter() {
+            rs.record(k);
+            rs.record(v);
+        }
+    }
+}
+
+impl<K: Ord + Record + Playback + Clone, V: Playback> Playback for AMap<K, V> {
+    fn playback_from(ps: impl PlaybackStreamTag) -> Self {
+        let len = ps.playback::<usize>();
+        let mut m = AMap::new();
+        for _ in 0 .. len {
+            let k = ps.playback::<K>();
+            let v = ps.playback::<V>();
+            m.insert(k, v);
+        }
+        m
+    }
+}

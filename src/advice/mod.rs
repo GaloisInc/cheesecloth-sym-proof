@@ -1,14 +1,11 @@
 use std::array;
 use std::convert::{TryFrom, TryInto};
-use std::collections::HashSet;
-use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::mem;
 use std::panic::{self, UnwindSafe};
-use std::path::Path;
 use serde_cbor;
 use crate::{Word, BinOp};
-use crate::logic::{Term, TermKind, VarId, VarCounter, Binder, Prop, ReachableProp, StatePred};
+use crate::logic::{Term, VarId, VarCounter, Binder, Prop, ReachableProp, StatePred};
 use crate::micro_ram::MemWidth;
 use crate::symbolic::{self, MemState, MemConcrete, MemMap, MemSnapshot, MemLog, MemMulti};
 
@@ -325,14 +322,6 @@ macro_rules! playback_stream_inner {
     };
 }
 
-macro_rules! playback_stream_alias_for_linear {
-    ($name:ident) => {
-        pub mod $name {
-            pub use super::linear::Tag;
-        }
-    };
-}
-
 #[cfg(not(feature = "playback_linear"))]
 macro_rules! playback_stream {
     ($name:ident) => { playback_stream_inner!($name); };
@@ -342,7 +331,11 @@ macro_rules! playback_stream {
 #[cfg(feature = "playback_linear")]
 macro_rules! playback_stream {
     (linear) => { playback_stream_inner!(linear); };
-    ($name:ident) => { playback_stream_alias_for_linear!($name); };
+    ($name:ident) => {
+        pub mod $name {
+            pub use super::linear::Tag;
+        }
+    };
 }
 
 
@@ -365,7 +358,7 @@ macro_rules! impl_record_playback_for_primitive {
 
         impl Playback for $T {
             fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-                if let Ok(max) = Value::try_from(<$T>::MAX) {
+                if Value::try_from(<$T>::MAX).is_ok() {
                     ps.take_bounded_cast(<$T>::MAX)
                 } else {
                     ps.take_cast()
@@ -608,6 +601,7 @@ impl Playback for MemWidth {
 impl Record for Term {
     fn record_into(&self, _rs: impl RecordingStreamTag) {
         #[cfg(feature = "recording_terms")] {
+            use crate::logic::term::TermKind;
             let rs = recording::terms::Tag;
             match self.kind() {
                 TermKind::Const(x) => {
@@ -644,8 +638,6 @@ impl Record for Term {
             rs.put_cast(index);
             return;
         }
-
-        panic!("no term recording mode is enabled");
     }
 }
 
@@ -689,7 +681,9 @@ impl Playback for Term {
             return Term::from_table_index(index);
         }
 
-        panic!("no term playback mode is enabled");
+        #[cfg(not(any(feature = "playback_terms", feature = "playback_term_index")))] {
+            panic!("no term playback mode is enabled");
+        }
     }
 }
 
@@ -854,15 +848,15 @@ impl Playback for MemConcrete {
 
 impl Record for MemMap {
     fn record_into(&self, rs: impl RecordingStreamTag) {
-        let _ = rs;
-        todo!()
+        let MemMap { ref m } = *self;
+        rs.record(m);
     }
 }
 
 impl Playback for MemMap {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        let _ = ps;
-        todo!()
+        let m = ps.playback();
+        MemMap { m }
     }
 }
 
@@ -938,127 +932,141 @@ pub mod playback {
 }
 
 
-fn load_file(path: impl AsRef<Path>, ps: impl PlaybackStreamTag) -> Result<(), String> {
-    let path = path.as_ref();
-    let f = File::open(path).map_err(|x| x.to_string())?;
-    ps.load(f).map_err(|x| x.to_string())?;
-    eprintln!("loaded advice: {path:?}");
-    Ok(())
-}
+mod load_finish {
+    // Helper functions in this module are used only when certain features are enabled.
+    #![allow(dead_code)]
+    #![allow(unused_imports)]
+    use std::fs::{self, File};
+    use std::path::Path;
+    use super::{
+        recording, playback, term_table, PlaybackStreamTag, RecordingStreamTag,
+        ChunkedRecordingStreamTag,
+    };
 
-fn load_term_table_from_file(path: impl AsRef<Path>) -> Result<(), String> {
-    let path = path.as_ref();
-    let f = File::open(path).map_err(|x| x.to_string())?;
-    term_table::playback::load(f).map_err(|x| x.to_string())?;
-    eprintln!("loaded advice: {path:?}");
-    Ok(())
-}
-
-#[cfg(not(feature = "playback_linear"))]
-pub fn load() -> Result<(), String> {
-    #[cfg(feature = "playback_rules")] {
-        load_file("advice/rules.cbor", playback::rules::Tag)?;
-        load_file("advice/props.cbor", playback::props::Tag)?;
-        load_file("advice/states.cbor", playback::states::Tag)?;
-    }
-    #[cfg(feature = "playback_terms")] {
-        load_file("advice/terms.cbor", playback::terms::Tag)?;
-    }
-    #[cfg(feature = "playback_term_table")] {
-        load_term_table_from_file("advice/term_table.cbor")?;
-    }
-    #[cfg(feature = "playback_term_index")] {
-        load_file("advice/term_index.cbor", playback::term_index::Tag)?;
-    }
-    #[cfg(feature = "playback_term_intern_index")] {
-        load_file("advice/term_intern_index.cbor", playback::term_intern_index::Tag)?;
-    }
-    #[cfg(feature = "playback_search_index")] {
-        load_file("advice/search_index.cbor", playback::search_index::Tag)?;
-    }
-    #[cfg(feature = "playback_avec_len")] {
-        load_file("advice/avec_len.cbor", playback::avec_len::Tag)?;
-    }
-    #[cfg(feature = "playback_amap_keys")] {
-        load_file("advice/amap_keys.cbor", playback::amap_keys::Tag)?;
-    }
-    #[cfg(feature = "playback_amap_access")] {
-        load_file("advice/amap_access.cbor", playback::amap_access::Tag)?;
+    fn load_file(path: impl AsRef<Path>, ps: impl PlaybackStreamTag) -> Result<(), String> {
+        let path = path.as_ref();
+        let f = File::open(path).map_err(|x| x.to_string())?;
+        ps.load(f).map_err(|x| x.to_string())?;
+        eprintln!("loaded advice: {path:?}");
+        Ok(())
     }
 
-    Ok(())
-}
-
-#[cfg(feature = "playback_linear")]
-pub fn load() -> Result<(), String> {
-    load_file("advice/linear.cbor", playback::linear::Tag)?;
-    #[cfg(feature = "playback_term_table")] {
-        load_term_table_from_file("advice/term_table.cbor")?;
+    fn load_term_table_from_file(path: impl AsRef<Path>) -> Result<(), String> {
+        let path = path.as_ref();
+        let f = File::open(path).map_err(|x| x.to_string())?;
+        term_table::playback::load(f).map_err(|x| x.to_string())?;
+        eprintln!("loaded advice: {path:?}");
+        Ok(())
     }
-    Ok(())
-}
 
+    #[cfg(not(feature = "playback_linear"))]
+    pub fn load() -> Result<(), String> {
+        #[cfg(feature = "playback_rules")] {
+            load_file("advice/rules.cbor", playback::rules::Tag)?;
+            load_file("advice/props.cbor", playback::props::Tag)?;
+            load_file("advice/states.cbor", playback::states::Tag)?;
+        }
+        #[cfg(feature = "playback_terms")] {
+            load_file("advice/terms.cbor", playback::terms::Tag)?;
+        }
+        #[cfg(feature = "playback_term_table")] {
+            load_term_table_from_file("advice/term_table.cbor")?;
+        }
+        #[cfg(feature = "playback_term_index")] {
+            load_file("advice/term_index.cbor", playback::term_index::Tag)?;
+        }
+        #[cfg(feature = "playback_term_intern_index")] {
+            load_file("advice/term_intern_index.cbor", playback::term_intern_index::Tag)?;
+        }
+        #[cfg(feature = "playback_search_index")] {
+            load_file("advice/search_index.cbor", playback::search_index::Tag)?;
+        }
+        #[cfg(feature = "playback_avec_len")] {
+            load_file("advice/avec_len.cbor", playback::avec_len::Tag)?;
+        }
+        #[cfg(feature = "playback_amap_keys")] {
+            load_file("advice/amap_keys.cbor", playback::amap_keys::Tag)?;
+        }
+        #[cfg(feature = "playback_amap_access")] {
+            load_file("advice/amap_access.cbor", playback::amap_access::Tag)?;
+        }
 
-fn finish_file(path: impl AsRef<Path>, rs: impl RecordingStreamTag) -> Result<(), String> {
-    let path = path.as_ref();
-    let f = File::create(path).map_err(|x| x.to_string())?;
-    rs.finish(f).map_err(|x| x.to_string())?;
-    eprintln!("saved advice: {path:?}");
-    Ok(())
-}
-
-fn finish_file_chunked(
-    path: impl AsRef<Path>,
-    crs: impl ChunkedRecordingStreamTag,
-) -> Result<(), String> {
-    let path = path.as_ref();
-    let f = File::create(path).map_err(|x| x.to_string())?;
-    crs.finish(f).map_err(|x| x.to_string())?;
-    eprintln!("saved advice: {path:?}");
-    Ok(())
-}
-
-pub fn finish() -> Result<(), String> {
-    fs::create_dir_all("advice").map_err(|x| x.to_string())?;
-
-    #[cfg(feature = "recording_rules")] {
-        finish_file("advice/rules.cbor", recording::rules::Tag)?;
-        finish_file("advice/props.cbor", recording::props::Tag)?;
-        finish_file("advice/states.cbor", recording::states::Tag)?;
+        Ok(())
     }
-    #[cfg(feature = "recording_terms")] {
-        finish_file("advice/terms.cbor", recording::terms::Tag)?;
+
+    #[cfg(feature = "playback_linear")]
+    pub fn load() -> Result<(), String> {
+        load_file("advice/linear.cbor", playback::linear::Tag)?;
+        #[cfg(feature = "playback_term_table")] {
+            load_term_table_from_file("advice/term_table.cbor")?;
+        }
+        Ok(())
     }
-    #[cfg(feature = "recording_term_table")] {
-        let path = "advice/term_table.cbor";
+
+
+    fn finish_file(path: impl AsRef<Path>, rs: impl RecordingStreamTag) -> Result<(), String> {
+        let path = path.as_ref();
         let f = File::create(path).map_err(|x| x.to_string())?;
-        term_table::recording::finish(f).map_err(|x| x.to_string())?;
+        rs.finish(f).map_err(|x| x.to_string())?;
         eprintln!("saved advice: {path:?}");
-    }
-    #[cfg(feature = "recording_term_index")] {
-        finish_file("advice/term_index.cbor", recording::term_index::Tag)?;
-    }
-    #[cfg(feature = "recording_term_intern_index")] {
-        finish_file("advice/term_intern_index.cbor", recording::term_intern_index::Tag)?;
-    }
-    #[cfg(feature = "recording_search_index")] {
-        finish_file("advice/search_index.cbor", recording::search_index::Tag)?;
-    }
-    #[cfg(feature = "recording_avec_len")] {
-        finish_file_chunked("advice/avec_len.cbor", recording::avec_len::Tag)?;
-    }
-    #[cfg(feature = "recording_amap_keys")] {
-        finish_file_chunked("advice/amap_keys.cbor", recording::amap_keys::Tag)?;
-    }
-    #[cfg(feature = "recording_amap_access")] {
-        finish_file("advice/amap_access.cbor", recording::amap_access::Tag)?;
-    }
-    #[cfg(feature = "recording_linear")] {
-        finish_file("advice/linear.cbor", recording::linear::Tag)?;
+        Ok(())
     }
 
-    Ok(())
+    fn finish_file_chunked(
+        path: impl AsRef<Path>,
+        crs: impl ChunkedRecordingStreamTag,
+    ) -> Result<(), String> {
+        let path = path.as_ref();
+        let f = File::create(path).map_err(|x| x.to_string())?;
+        crs.finish(f).map_err(|x| x.to_string())?;
+        eprintln!("saved advice: {path:?}");
+        Ok(())
+    }
+
+    pub fn finish() -> Result<(), String> {
+        fs::create_dir_all("advice").map_err(|x| x.to_string())?;
+
+        #[cfg(feature = "recording_rules")] {
+            finish_file("advice/rules.cbor", recording::rules::Tag)?;
+            finish_file("advice/props.cbor", recording::props::Tag)?;
+            finish_file("advice/states.cbor", recording::states::Tag)?;
+        }
+        #[cfg(feature = "recording_terms")] {
+            finish_file("advice/terms.cbor", recording::terms::Tag)?;
+        }
+        #[cfg(feature = "recording_term_table")] {
+            let path = "advice/term_table.cbor";
+            let f = File::create(path).map_err(|x| x.to_string())?;
+            term_table::recording::finish(f).map_err(|x| x.to_string())?;
+            eprintln!("saved advice: {path:?}");
+        }
+        #[cfg(feature = "recording_term_index")] {
+            finish_file("advice/term_index.cbor", recording::term_index::Tag)?;
+        }
+        #[cfg(feature = "recording_term_intern_index")] {
+            finish_file("advice/term_intern_index.cbor", recording::term_intern_index::Tag)?;
+        }
+        #[cfg(feature = "recording_search_index")] {
+            finish_file("advice/search_index.cbor", recording::search_index::Tag)?;
+        }
+        #[cfg(feature = "recording_avec_len")] {
+            finish_file_chunked("advice/avec_len.cbor", recording::avec_len::Tag)?;
+        }
+        #[cfg(feature = "recording_amap_keys")] {
+            finish_file_chunked("advice/amap_keys.cbor", recording::amap_keys::Tag)?;
+        }
+        #[cfg(feature = "recording_amap_access")] {
+            finish_file("advice/amap_access.cbor", recording::amap_access::Tag)?;
+        }
+        #[cfg(feature = "recording_linear")] {
+            finish_file("advice/linear.cbor", recording::linear::Tag)?;
+        }
+
+        Ok(())
+    }
 }
+
+pub use self::load_finish::{load, finish};
 
 
 macro_rules! rollback_on_panic_body {
@@ -1078,6 +1086,7 @@ macro_rules! rollback_on_panic_body {
 pub fn rollback_on_panic<F: FnOnce() -> R + UnwindSafe, R>(f: F) -> R {
     rollback_on_panic_body!(
         f;
-        rules, props, states, terms, term_index, term_intern_index, search_index
+        rules, props, states, terms, term_index, term_intern_index, search_index, avec_len,
+        amap_keys, amap_access, linear
     )
 }
