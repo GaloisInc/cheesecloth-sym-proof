@@ -149,37 +149,74 @@ fn run(path: &str) -> Result<(), String> {
             Opcode::Load(w) => {
 		let addr = conc_state.operand_value(instr.op2);
 		load_mem.insert((addr, w, pc));
+		// eprintln!("LOAD - {} : {} <- {} ", pc, addr, (conc_state.regs[instr.rd as usize]) );
             },
+            Opcode::Store(w) => {
+		let addr = conc_state.operand_value(instr.op2);
+		//eprintln!("STORE - {} : {} <- {} ", pc, addr, (conc_state.regs[instr.r1 as usize]) );
+            }
 	    _ => ()
 	}
     }
-    // At the end of the loop (i.e. back at the initial state) we fill
-    // in the values of memory
     
-    let mut init_mem_map = MemMap::new(u64::MAX);
-    for &(addr, ww, pc) in load_mem.iter(){
-	let val = mem_load(&conc_state.mem, ww, addr);
-	init_mem_map.store(ww, Term::const_(addr), Term::const_(val), &[])?;
-	let to_problem_address = addr - 4295563809;
-	if addr.abs_diff(4295563809) < 10 {
-            eprintln!("Loading to address {}. w={:?}, val={}, pc={}", addr, ww, val, pc); 
-	    
+    let mut init_mem_map  = |i| {
+	let mut init_mem_map0 = MemMap::new(u64::MAX);
+	for &(addr, ww, pc) in load_mem.iter(){
+	    let val = mem_load(&conc_state.mem, ww, addr);
+	    init_mem_map0.store(ww, Term::const_(addr), Term::const_(val), &[]).ok();
 	}
-	    
-    }
+	
+	// One address has the index
+	init_mem_map0.store(MemWidth::W8, Term::const_(2147480784), i, &[]).ok();
+	// One address has garbage (Really it's the index)
+	init_mem_map0.store(MemWidth::W8, Term::const_(2147480680), i, &[]).ok();
+	return Some(init_mem_map0)
+    };
+    
+
+    // ----------------------------------------
+    // Define the state at the top of the loop
+    // and it's reachability.
+    // ----------------------------------------
+    let st_loop = |vars: &mut VarCounter, i: Term| {
+        StatePred {
+            state: symbolic::State {
+		// current pc should be the address of the loop
+		pc: conc_state.pc,
+		// We keep all concrete registers, except for the
+		// index i in register 8.
+                regs: array::from_fn(|r| {
+                    match r {
+			8 => i,
+			_ => conc_state.regs[r].into(),
+                    }
+                }),
+                // Memory in the initial state is a MemMap with all
+                // the address in memeory that would be read in the
+                // loop.
+                mem: MemState::Map(init_mem_map(i).unwrap()),
+		conc_st: Some (conc_state.clone()),
+            },
+            props: vec![].into(),
+        }
+    };
+
+    // Helper to build the `Prop::Reachable` for a given `n` and cycle count `c`:
+    //      reach(c, st_loop(i))
+    let mk_prop_reach = |i: Term, c: Term| {
+        Prop::Reachable(ReachableProp {
+            pred: Binder::new(|vars| st_loop(vars, i.shift())),
+            min_cycles: c,
+        })
+    };
     
     // ----------------------------------------
-    // Set up the proof state
-    // ----------------------------------------
-    let mut pf = Proof::new(prog);
-
-
-    // ----------------------------------------
-    // Prove a single iteration
+    // Prove a double iteration (twice around the loop)
     // ----------------------------------------
 
     // We first prove a lemma of the form:
-    //      forall b n, n > 0 -> R({r10 = i}, b) -> R({r10 = i + 2}, b + ???)
+    //      forall b n, i > 0 -> ???
+    //                  R({r10 = i, concrete_regs}, b) -> R({r10 = i + 2, concrete_regs}, b + 5460)
     // The proof is done by running symbolic execution.
     eprintln!("\nprove p_iter");
     let p_iter = pf.tactic_forall_intro(
@@ -293,7 +330,6 @@ fn run(path: &str) -> Result<(), String> {
                 // }
                 // rpf.rule_forget_mem();
 
-                rpf.show_state();
             });
 
             // Rename variables so the final state uses the same names as the initial state.
@@ -369,13 +405,18 @@ fn run(path: &str) -> Result<(), String> {
                     (vec![p], b)
                 },
                 |pf, b| {
+		    
                     let n = n.shift();
                     let n_plus_1 = Term::add(n, 1.into());
                     //pf.show_context();
 
+		    println!("==== Cloning p_iter");
                     let p_iter = pf.tactic_clone(p_iter);
+		    println!("==== applying p_iter");
                     let _p_first = pf.tactic_apply(p_iter, &[b, n_plus_1]);
 
+		    
+		    println!("==== Admit 1000>n");
                     pf.tactic_admit(Prop::Nonzero(Term::cmpa(1000.into(), n)));
                     let p_ind = pf.tactic_clone((1, 1));
                     let p_rest = pf.tactic_apply0(p_ind);
