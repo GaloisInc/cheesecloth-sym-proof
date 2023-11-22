@@ -545,9 +545,9 @@ fn run(path: &str) -> Result<(), String> {
     let p_loop_n = pf.tactic_apply0(p_loop_n);
     println!("==== Apply p_loop_n");
     
-    println!("============ Context");
-    pf.show_context();
-    println!("============ END Context");
+    // println!("============ Context");
+    // pf.show_context();
+    // println!("============ END Context");
     let p_exec = pf.tactic_apply(p_loop_n, &[conc_state.cycle.into()]);
 
 
