@@ -1,6 +1,6 @@
 //! Proof that sqrt runs for at least 5e22 steps.  We first run the program concretely up to the
 //! start of the loop (~5492249 steps), then we show that the loop will run for
-//! at least (~ u64::MAX-13) iterations (~5e22 steps).
+//! at least (~ i64::MAX-13) iterations (~5e22 steps).
 //!
 //! Usage:
 //! ```
@@ -24,6 +24,8 @@ use sym_proof::micro_ram::{Opcode, MemWidth, mem_load};
 use sym_proof::symbolic::{self, MemState, MemLog, Memory, MemMap, MemConcrete};
 use sym_proof::tactics::{Tactics, ReachTactics};
 use witness_checker::micro_ram::types::Advice;
+
+const iMAX:u64 = i64::MAX as u64;
 
 fn run(path: &str) -> Result<(), String> {
     let exec = import::load_exec(path);
@@ -154,7 +156,7 @@ fn run(path: &str) -> Result<(), String> {
     }
     
     let mut init_mem_map  = |i| {
-	let mut init_mem_map0 = MemMap::new(u64::MAX);
+	let mut init_mem_map0 = MemMap::new(iMAX);
 	for &(addr, ww, pc) in load_mem.iter(){
 	    let val = mem_load(&conc_state.mem, ww, addr);
 	    init_mem_map0.store(ww, Term::const_(addr), Term::const_(val), &[]).ok();
@@ -224,7 +226,7 @@ fn run(path: &str) -> Result<(), String> {
 		// i > 1 -> 
                 Prop::Nonzero(Term::cmpa(i.clone(), 1.into())),
 		// MAX > i+1 -> 
-                Prop::Nonzero(Term::cmpa((u64::MAX).into(),Term::add(1.into(), i.clone()))),
+                Prop::Nonzero(Term::cmpa((iMAX).into(),Term::add(1.into(), i.clone()))),
 		// reach(c, st_loop(i)) -> 
 		mk_prop_reach(i, b.clone()),
             ], i)
@@ -351,7 +353,7 @@ fn run(path: &str) -> Result<(), String> {
 
     // End of the execution is Max - 1, to avoid trouble at the baoundary
     let target_below_max = 2; 
-    let max_loops = Term::sub(u64::MAX.into(),target_below_max.into());
+    let max_loops = Term::sub(iMAX.into(),target_below_max.into());
     // Write i in terms of n (n increases, i decreases)
     let i_from_n = |n| (Term::sub(max_loops,Term::mull(2.into(), n)));
     
@@ -361,13 +363,13 @@ fn run(path: &str) -> Result<(), String> {
 	    //      forall n,
             let n = vars.fresh();
 	    //          Max > 2n + 1 ->
-	    let p0 = Prop::Nonzero(Term::cmpa(u64::MAX.into(), Term::add(Term::mull(n, 2.into()), 1.into())));
+	    let p0 = Prop::Nonzero(Term::cmpa(iMAX.into(), Term::add(Term::mull(n, 2.into()), 1.into())));
             //          let i := Max - 2n in
 	    let i:Term = i_from_n(n);
 	    //          (i > 1) ->
 	    let p1 = Prop::Nonzero(Term::cmpa(i, 1.into()));
             //          (Max > i + 1) ->
-	    let p2 = Prop::Nonzero(Term::cmpa(u64::MAX.into(), Term::add(i,1.into())));
+	    let p2 = Prop::Nonzero(Term::cmpa(iMAX.into(), Term::add(i,1.into())));
             let q = Prop::Forall(Binder::new(|vars| {
                 let n = n.shift();
 		let i:Term = i_from_n(n);
@@ -436,7 +438,7 @@ fn run(path: &str) -> Result<(), String> {
 		    pf.show_prop((1,0));
 		    pf.show_prop((2,0));
 		    let _i1_no_over = pf.tactic_admit(
-			Prop::Nonzero(Term::cmpa(u64::MAX.into(),
+			Prop::Nonzero(Term::cmpa(iMAX.into(),
 						 Term::add(Term::sub(max_loops, Term::mull(n,2.into())), 1.into()))));
 
 		    println!("==== Clone P_iter");
@@ -455,7 +457,7 @@ fn run(path: &str) -> Result<(), String> {
 		    println!("==== ADMIT: \n\t(Max >u (2n + 3)) ->\n\t(Max >u (2n + 1))");
 		    pf.show_prop((2,0));
 		    let _IndHyp_H1 = pf.tactic_admit(
-			Prop::Nonzero(Term::cmpa(u64::MAX.into(),
+			Prop::Nonzero(Term::cmpa(iMAX.into(),
 						 Term::add(Term::mull(n,2.into()), 1.into()))));
 
 		    // println!("============ Context");
@@ -530,9 +532,9 @@ fn run(path: &str) -> Result<(), String> {
     let initial_n = {
 	// current value of r8
 	let r8_val = conc_state.regs[8];
-	let diff = u64::MAX - r8_val - target_below_max;
+	let diff = iMAX - r8_val - target_below_max;
 	if diff%2 != 0{
-	    eprintln!("=== Error, Max-r[8] should be even, but r[8]={}, Max={}", r8_val, u64::MAX)
+	    eprintln!("=== Error, Max-r[8] should be even, but r[8]={}, Max={}", r8_val, iMAX)
 	}
 	diff/2
     };
