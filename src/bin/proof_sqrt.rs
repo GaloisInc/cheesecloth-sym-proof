@@ -332,19 +332,19 @@ fn run(path: &str) -> Result<(), String> {
 
             });
 
-            // Rename variables so the final state uses the same names as the initial state.
-            pf.tactic_reach_rename_vars(p_reach, |vars| {
-                let mut var_map = [None; 39];
-                for i in 0 .. 33 {
-                    var_map[i] = Some(vars.fresh_var().index());
-                }
-                var_map[34] = var_map[11];
-                var_map[35] = var_map[13];
-                var_map[36] = var_map[14];
-                var_map[37] = var_map[15];
-                var_map[38] = var_map[32];
-                var_map
-            });
+            // // Rename variables so the final state uses the same names as the initial state.
+            // pf.tactic_reach_rename_vars(p_reach, |vars| {
+            //     let mut var_map = [None; 39];
+            //     for i in 0 .. 33 {
+            //         var_map[i] = Some(vars.fresh_var().index());
+            //     }
+            //     var_map[34] = var_map[11];
+            //     var_map[35] = var_map[13];
+            //     var_map[36] = var_map[14];
+            //     var_map[37] = var_map[15];
+            //     var_map[38] = var_map[32];
+            //     var_map
+            // });
         },
     );
 
@@ -356,39 +356,56 @@ fn run(path: &str) -> Result<(), String> {
     // We are proving the following statement:
     //
     //      forall n,
-    //          1 + 2 * n < u64::MAX ->
+    //          Max > 2n + 3 ->
+    //          let i := Max - 2n in
+    //          (i > 1) ->
+    //          (Max > i + 1) ->
     //          forall b,
-    //              reach(b, st_loop(u64::MAX - 2 * n)) ->
-    //              reach(b + n * 5460, st_loop(u64::MAX))
+    //              reach(b, st_loop(i) ->
+    //              reach(b + n * 5460, st_loop(max))
     //
     // We separate the binders for `b` and `n` because `tactic_induction` expects to see only a
     // single bound variable (`n`) in `Hsucc`.
 
+    // End of the execution is Max - 1, to avoid trouble at the baoundary
+    let max_loops = Term::sub(u64::MAX.into(),2.into());
+    // Write i in terms of n (n increases, i decreases)
+    let i_from_n = |n| (Term::sub(max_loops,Term::mull(2.into(), n)));
+    
     eprintln!("\nprove p_loop");
     let p_loop = pf.tactic_induction(
         Prop::Forall(Binder::new(|vars| {
 	    //      forall n,
             let n = vars.fresh();
-	    //          1 + 2 * n < MAX ->
-            let p = Prop::Nonzero(Term::cmpa(u64::MAX.into(), Term::add(1.into(),Term::mull(2.into(), n))));
+	    //          Max > 2n + 1 ->
+	    let p0 = Prop::Nonzero(Term::cmpa(u64::MAX.into(), Term::add(Term::mull(n, 2.into()), 1.into())));
+            //          let i := Max - 2n in
+	    let i:Term = i_from_n(n);
+	    //          (i > 1) ->
+	    let p1 = Prop::Nonzero(Term::cmpa(i, 1.into()));
+            //          (Max > i + 1) ->
+	    let p2 = Prop::Nonzero(Term::cmpa(u64::MAX.into(), Term::add(i,1.into())));
             let q = Prop::Forall(Binder::new(|vars| {
                 let n = n.shift();
+		let i:Term = i_from_n(n);
 		//      forall b,
                 let b = vars.fresh();
-		//          reach(b, st_loop(MAX - 2 * n)) ->
-                let p = mk_prop_reach(Term::sub(u64::MAX.into(),Term::mull(2.into(), n)), b);
-		//          reach(b + n * 5460, st_loop(u64::MAX))
-                let q = mk_prop_reach(u64::MAX.into(), Term::add(b, Term::mull(n, 5460.into())));
+		//          reach(b, st_loop(i)) ->
+                let p = mk_prop_reach(i, b);
+		//          reach(b + n * 5460, st_loop(max))
+                let q = mk_prop_reach(max_loops, Term::add(b, Term::mull(n, 5460.into())));
                 (vec![p].into(), Box::new(q))
             }));
-            (vec![p].into(), Box::new(q))
+            (vec![p0,p1,p2].into(), Box::new(q))
         })),
         |pf| {
-            //pf.show_context();
+	    // println!("==== Context");
+	    // pf.show_context();
+	    // println!("==== END Context");
             pf.tactic_forall_intro(
                 |vars| {
                     let b = vars.fresh();
-                    let p = mk_prop_reach(u64::MAX.into(), b);
+                    let p = mk_prop_reach(max_loops, b);
                     (vec![p], b)
                 },
                 |_pf, _b| {
@@ -400,35 +417,102 @@ fn run(path: &str) -> Result<(), String> {
             pf.tactic_forall_intro(
                 |vars| {
                     let n = n.shift();
-                    let b = vars.fresh();
-                    let p = mk_prop_reach(Term::add(n, 1.into()), b);
+                    let n_plus_1 = Term::add(n, 1.into());
+		    // Let i+2 := max - 2n
+		    let i_plus_2 = i_from_n(n_plus_1);
+
+		    let b = vars.fresh();
+                    let p = mk_prop_reach(i_plus_2, b);
                     (vec![p], b)
                 },
                 |pf, b| {
+
+		    
+		    // println!("==== Context");
+		    // pf.show_context();
+		    // println!("==== END Context");
 		    
                     let n = n.shift();
                     let n_plus_1 = Term::add(n, 1.into());
-                    //pf.show_context();
 
-		    println!("==== Cloning p_iter");
-                    let p_iter = pf.tactic_clone(p_iter);
-		    println!("==== applying p_iter");
-                    let _p_first = pf.tactic_apply(p_iter, &[b, n_plus_1]);
+		    // Let i := max - 2n
+		    let i = i_from_n(n);
+		    // Let i+2 := max - 2n
+		    let i_sub_2 = i_from_n(n_plus_1);
+		    
+		    // (Max >u 2n + 3) -> (i > 1)
+		    println!("==== ADMIT: \n\t(Max >u 2n + 3) -> (i > 1)");
+		    pf.show_prop((2,0));
+		    let i_gt_1 = pf.tactic_admit(
+			Prop::Nonzero(Term::cmpa(i, 1.into())));
 
 		    
-		    println!("==== Admit 1000>n");
-                    pf.tactic_admit(Prop::Nonzero(Term::cmpa(1000.into(), n)));
-                    let p_ind = pf.tactic_clone((1, 1));
+		    // n+1 > 0 ->
+		    // Max > 2n+2 ->
+		    // Max > (Max - 2 - 2n ) + 1
+		    println!("==== ADMIT: \n\tn+1 > 0 ->\n\tMax > 2n+2 -> \n\tMax > (Max - 2 - 2n ) + 1");
+		    pf.show_prop((1,0));
+		    pf.show_prop((2,0));
+		    let i1_no_over = pf.tactic_admit(
+			Prop::Nonzero(Term::cmpa(u64::MAX.into(),
+						 Term::add(Term::sub(max_loops, Term::mull(n,2.into())), 1.into()))));
+
+		    println!("==== CLone P_iter");
+		    let p_iter = pf.tactic_clone(p_iter);
+
+		     
+		    println!("==== Context");
+		    pf.show_context();
+		    println!("==== END Context");
+		    
+		    println!("==== apply P_iter");
+		    let _p_first = pf.tactic_apply(p_iter, &[b, i_sub_2]);
+		    
+		    
+		    // (Max >u (2n + 3)) ->
+		    // (Max >u (2n + 1))
+		    println!("==== ADMIT: \n\t(Max >u (2n + 3)) ->\n\t(Max >u (2n + 1))");
+		    pf.show_prop((2,0));
+		    let IndHyp_H0 = pf.tactic_admit(
+			Prop::Nonzero(Term::cmpa(u64::MAX.into(),
+						 Term::add(Term::mull(n,2.into()), 1.into()))));
+
+	
+		    // println!("==== Context");
+		    // pf.show_context();
+		    // println!("==== END Context");
+
+		    println!("==== apply induction hypothesis");
+		    let p_ind = pf.tactic_clone((1, 1));
                     let p_rest = pf.tactic_apply0(p_ind);
 
+		    
                     let expected_cycles =
-                        Term::add(b, Term::add(Term::mull(n, 13.into()), 13.into()));
+			Term::add(b, Term::add(Term::mull(n, 5460.into()), 5460.into()));
                     pf.tactic_admit(Prop::Nonzero(Term::cmpe(
-                        Term::add(Term::add(b, 13.into()), Term::mull(n, 13.into())),
+                        Term::add(Term::add(b, 5460.into()), Term::mull(n, 5460.into())),
                         expected_cycles,
                     )));
-                    let p_final = pf.tactic_apply(p_rest, &[Term::add(b, 13.into())]);
-                    pf.tactic_reach_shrink(p_final, expected_cycles);
+
+		    
+		    println!("==== Context");
+		    pf.show_context();
+		    println!("==== END Context");
+
+
+		    // reach(b + 5460, st_loop(i_sub_2 + 2)) ->
+		    // reach(b + 5460, st_loop(i)
+		    println!("==== ADMIT: \n\treach(b + 5460, st_loop(i_sub_2 + 2)) ->\n\treach(b + 5460, st_loop(i)");
+		    pf.show_prop((3,4));
+		    let IndHyp_H0 = pf.tactic_admit(  mk_prop_reach(i, Term::add(b,5460.into())));
+
+		    println!("==== apply induction hypothesis AGAIN");
+
+                    let p_final = pf.tactic_apply(p_rest, &[Term::add(b, 5460.into())]);
+                    
+		    
+		    println!("==== Shrink");
+		    pf.tactic_reach_shrink(p_final, expected_cycles);
                 },
             );
         },
