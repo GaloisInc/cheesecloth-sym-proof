@@ -461,9 +461,9 @@ fn run(path: &str) -> Result<(), String> {
 		    let p_iter = pf.tactic_clone(p_iter);
 
 		     
-		    println!("==== Context");
-		    pf.show_context();
-		    println!("==== END Context");
+		    // println!("==== Context");
+		    // pf.show_context();
+		    // println!("==== END Context");
 		    
 		    println!("==== apply P_iter");
 		    let _p_first = pf.tactic_apply(p_iter, &[b, i_sub_2]);
@@ -495,9 +495,9 @@ fn run(path: &str) -> Result<(), String> {
                     )));
 
 		    
-		    println!("==== Context");
-		    pf.show_context();
-		    println!("==== END Context");
+		    // println!("==== Context");
+		    // pf.show_context();
+		    // println!("==== END Context");
 
 
 		    // reach(b + 5460, st_loop(i_sub_2 + 2)) ->
@@ -541,22 +541,45 @@ fn run(path: &str) -> Result<(), String> {
         min_cycles: conc_state.cycle.into(),
     }));
 
+    println!("==== Context");
+    pf.show_context();
+    println!("==== END Context");
+
     // Modify `p_conc` to match the premise of `p_loop`.
     pf.tactic_reach_extend(p_conc, |rpf| {
         for r in 0 .. 33 {
-            if r == 12 {
+            if r == 8 {
                 // Pad out the variable numbering to align with p_loop.
-                rpf.rule_var_fresh();
+                //rpf.rule_var_fresh();
             } else {
-                rpf.rule_forget_reg(r);
+		// no op
             }
         }
     });
 
+    
+
     // Combine `p_conc` and `p_loop` to prove that the loop's final state is reachable.
-    let p_loop_n = pf.tactic_apply(p_loop, &[conc_state.regs[12].into()]);
+    println!("==== Apply p_loop 1");
+    // Initial n value:
+    let initial_n = {
+	// current value of r8
+	let r8_val = conc_state.regs[8];
+	let diff = u64::MAX - r8_val - 2;
+	if diff%2 != 0{
+	    eprintln!("=== Error, Max-r[8] should be even, but r[8]={}, Max={}", r8_val, u64::MAX)
+	}
+	diff/2
+    };
+    let p_loop_n = pf.tactic_apply(p_loop, &[initial_n.into()]);
     pf.rule_trivial();
+    println!("==== Apply p_loop 2");
     let p_loop_n = pf.tactic_apply0(p_loop_n);
+    println!("==== Apply p_loop_n");
+    
+    println!("==== Context");
+    pf.show_context();
+    println!("==== END Context");
     let p_exec = pf.tactic_apply(p_loop_n, &[conc_state.cycle.into()]);
 
 
