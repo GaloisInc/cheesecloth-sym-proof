@@ -1,110 +1,169 @@
 Advice is recorded and refined in several stages, from the first stage which is
 the secret handwritten proof to the last stage which is run online in ZK.
 
-There are several parts of the original proof we wish to replace with advice:
+We record advice in several indepedent streams.  Each stage of advice
+generation reads some streams and generates others.  Splitting advice into
+separate streams lets us read the same advice across several stages without
+worrying about how it interleaves with newly generated advice from the later
+stages.  It also helps with debugging, since a bug in generation of one advice
+stream can't affect other streams.
 
-1. The original proof executes proof steps in a hardcoded sequence; the ZK
-   checker should instead choose steps based on advice, so that the proof
-   itself remains secret.
-2. The original proof uses high-level tactics; the ZK checker should call rules
-   directly, which is simpler.  This also eliminates any searches or temporary
-   `Term`/`Prop` construction that tactics might perform.
-3. The original proof allocates terms as needed; the ZK checker should start
-   with all terms preloaded in initial memory.
-4. The original proof uses `HashMap` lookups for interning terms; the ZK
-   checker should find the right term in the table by advice instead.
-5. The original proof constructs terms to pass to proof rules; the ZK checker
-   should instead pick a pre-constructed term from the interning table.
-6. The original proof performs searches by linear scan; the ZK checker should
-   get the search result as advice.
-7. The original proof grows `Vec`s incrementally; the ZK checker should
-   allocate each `Vec` with the proper length from the start, which avoids
-   reallocation and copies.
+Advice generation stages are defined as the various `stageN` features in
+`Cargo.toml`.  See that file for details of which advice is recorded or played
+back in each stage.
 
-## Stage 0
+We currently define the following advice streams:
 
-In this stage, we run the original proof (e.g. `src/bin/proof_grit.rs`) with
-recording enabled.
+## `rules`
 
-In this stage, each time the proof calls a `rule_*` method (directly or through
-a tactic), the rule and its arguments are recorded as advice.  The
-serialization of arguments as advice effectively describes how to reconstruct
-each `Prop`, `Term`, or other value that appears as a rule argument.
+This is actually split into three streams, `rules`, `props`, and `states`, but
+they are always recorded and played back together, controlled by the
+`recording_rules` and `playback_rules` Cargo features.  Together, these
+describe a transcript of all the `kernel::Proof` rules invoked during the proof
+and the arguments that were passed to those rules.  The exception is that any
+`Term` arguments, including `Term`s embedded in `Prop`s or states, are recorded
+in either the `terms` or `term_index` stream, depending on which stage of
+advice generation is running.
 
-Slice searches performed during this stage as part of a proof rule will also
-record the index where the target item was found.  We do this early because it
-allows skipping construction of some terms.  In particular, when playing back
-this advice, rules that use `require_premise_one_of` can construct only the
-premise that was actually found, rather than constructing all candidate
-premises.
+The serialized arguments in this stream are represented as a sequence of values
+that essentially describes how to build the argument value from scratch.
 
-This stage eliminates tactics and the hardcoded proof structure, handling
-points (1) and (2).
+Dependencies:
 
-* Reads: (none)
-* Writes `rules`: rule invocations and some arguments.
-* Writes `props`: serialized `Prop`s appearing in rule arguments.
-* Writes `states`: serialized `symbolic::State`s appearing in rule arguments.
-* Writes `terms`: serialized `Term`s appearing in rule arguments.
-* Writes `search_index`: for each search operation, contains the index where
-  the target value was found.
+* Before `term_table`
 
-## Stage 1
+The `rules` stream is recorded first, in stage 0, because it allows running the
+proof without calling tactics, and thus eliminates unneeded temporary values
+and failed attempts to apply rules (as in `try_rule_step`).  In particular,
+this eliminates unneeded `Term`s so they won't be included in the `term_table`
+advice.
 
-In this stage, we replay the rule invocations (including reconstructing any
-necessary `Term`s, `Prop`s, or other arguments) from advice, and record
-additional, finer-grained advice.
+## `terms`
 
-The reason some advice is not recorded until this stage is to avoid including
-unnecessary values in the advice stream.  For example, when recording `Term`s,
-we want to include only `Term`s that are actually necessary for the proof and
-ignore any `Term`s that might be constructed as temporaries in certain tactics.
+This stream describes how to build each `Term` used in rule arguments through a
+sequence of `Term` constructor applications.  It is recorded in conjunction
+with `rules`, and is played back with `rules` until the `term_index` stream is
+available to replace it.
 
-In this stage, each time `Term::intern` allocates a new `Term`, it also records
-the `TermKind` in a table of terms; these will be the preallocated terms used
-in later stages.  Also, when a rule argument contains a `Term`, this stage
-records the index of that term in the table, which can be used in place of the
-serialized term.
+## `search_index`
 
-Note that this stage does *not* record advice for `Term::intern`.  We need to
-eliminate calls to `Term::intern` for rule arguments before recording that
-advice, since the ZK checker calls `Term::intern` only for `Term`s constructed
-internally by the proof kernel, and simply picks `Term`s from the table for
-rule arguments.  However, all `Term`s, including rule arguments, must appear in
-the final table.  So we have this stage build the table and also eliminate rule
-argument `Term::intern` calls, and then have the next stage compute interning
-advice for the remaining `Term::intern` calls.
+Certain proof rules involve searching data structures, such as checking whether
+a particular `Prop` is present in the proof context.  For each search, this
+stream records where the value was found; during playback, the proof checker
+can simply check that the element at that location satisfies the query.
 
-This stage handles points (3) and (5).
+In some cases, a proof rule may search for any of N different forms of a value.
+For those searches, this advice stream records which of the N variants was
+actually found.  When playing back this advice, only the matching variant needs
+to be constructed; the non-matching variants are omitted.
 
-* Reads: `rules`, `search_index`, `props`, `states`, `terms`
-* Writes `term_table`: an array containing the `TermKind`s of all `Term`s used
-  in the proof.  Note this is not an advice stream (a sequence of words), but
-  rather a table that can be placed in initial memory.
-* Writes `term_index`: contains an index into `term_table` for each `Term`
-  appearing in rule arguments.  This replaces `terms`.
+Dependencies:
 
-## Stage 2
+* After `rules` (or at the same time as `rules`, as an optimization)
 
-Here we again replay rule invocations and record additional advice.
+`search_index` should be recorded after `rules` so it doesn't record any
+searches performed within tactics.  However, currently only proof rules record
+into this stream, so as an optimization, we can record it at the same time as
+`rules`.
 
-In this stage, `Term::intern` looks up terms in the preallocated `term_table`
-constructed by the previous stage and records the index where it finds each
-term for interning purposes.  Also, `AVec`s record their peak lengths.
+## `term_table`
 
-This stage handles points (4), (6), and (7).
+This "advice stream" is actually a table of preconstructed `Term` values, which
+will be provided as secret initial memory in the ZK proof checker.  It includes
+every `Term` that is used anywhere in the proof, so there is no need to
+allocate terms at run time.
 
-* Reads: `rules`, `search_index`, `props`, `states`, `term_table`, `term_index`
-* Writes `term_intern_index`: contains an index into `term_table` where the
-  result of each `Term::intern` call can be found.
-* Writes `avec_len`: contains the maximum length of each `AVec` over its
-  lifetime, so the proper capacity can be allocated up front.
+Dependencies:
 
-## Stage 3
+* After `rules`
+* After `search_index`
 
-This is the final zero-knowledge proof checker, which can be compiled to run in
-MicroRAM.  It reads the previously recorded advice and uses it to efficiently
-check the proof.
+We'd like to make this table as small as possible, so any advice optimizations
+that eliminate `Term`s from the proof should be done before this advice stream
+is recorded.  Playing back `rules` eliminates any temporary `Term`s that might
+be constructed in tactics.  Playing back `search_index` allows skipping
+construction of non-matching values in one-of-N searches, which can eliminate
+more temporary `Term`s.
 
-* Reads: `rules`, `search_index`, `props`, `states`, `term_table`,
-  `term_index`, `term_intern_index`, `avec_len`
+## `term_index`
+
+This stream represents terms used in rule arguments as indices into
+`term_table`.  Once `term_index` has been recorded, it is used instead of
+`terms` in later stages.  Playing back `term_index` is more efficient than
+playing back `terms` because it only mentions the top-level term, whereas
+`terms` describes every sub-term.
+
+Dependencies:
+
+* After or at the same time as `term_table`
+
+Since the values in this stream are indices into `term_table`, `term_table`
+must be constructed first.
+
+## `term_intern_index`
+
+This stream contains indices into the `term_table`, similar to `term_index`,
+but these indices are used by `Term::intern` to locate the preallocated,
+interned version of ecah term, rather than when building rule arguments.
+
+Dependencies:
+
+* After `term_table`
+* After `term_index`
+
+Playing back `term_index` advice causes terms in rule arguments to be looked up
+from the `term_table` rather than constructed with `Term::intern` (or other
+constructors that dispatch to `Term::intern`).  Since `term_intern_index`
+contains advice for each `Term::intern` call, it must be recorded after this
+optimization that eliminates `Term::intern` calls.
+
+## `avec_len`
+
+For each `AVec` constructed during proof checking, this stream contains the
+maximum length that the `AVec` will grow to.  This allows allocating an
+appropriate amount of memory up front and lets us avoid growing the vector
+dynamically, which involves an expensive `memcpy` operation.
+
+Dependencies:
+
+* After `rules`
+
+This stream identifies vectors by the order in which they are constructed,
+which means eliminating (or adding) vectors afterward would invalidate the
+recorded advice.  Any advice optimizations that may eliminate `AVec`s must run
+before `avec_len` is recorded, so we require `rules` to be recorded first
+(eliminating temporaries in tactics).
+
+Note that `symbolic::State` may contain `AVec`s (depending on the choice of
+memory representation).
+
+## `amap_keys`
+
+For each `AMap` constructed during proof checking, this stream contains the
+set of all keys that will be inserted into the map (including keys that are
+inserted but later removed).  This allows allocating the map up front as a flat
+vector of `(Key, Option<Value>)` pairs and allows efficient lookups for both
+present and absent keys; see the `AMap` doc comments for more details on the
+implementation.
+
+Dependencies:
+
+* After `rules`
+
+Like `avec_len`, this stream identifies maps by the order of construction, so
+advice optimizations that eliminate maps must happen first.
+
+## `amap_access`
+
+For each lookup into an `AMap`, this stream contains an index used to
+accelerate the lookup.  For successful lookups, this is the index of the entry
+with a matching key.  See comments in `AMap::get_index` for details.
+
+Dependencies:
+
+* After `amap_keys`
+
+Each value in the stream is an index into the entries of a map, and the number
+and order of entries depends on the complete key set across the lifetime of the
+map.  So those indices can't be computed until the full key set (as recorded in
+`amap_keys`) is known.

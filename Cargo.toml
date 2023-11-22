@@ -75,3 +75,5 @@ recording_amap_keys = []
 playback_amap_keys = []
 recording_amap_access = []
 playback_amap_access = []
+
+# When adding new advice streams, be sure to update `doc/advice.md`.
