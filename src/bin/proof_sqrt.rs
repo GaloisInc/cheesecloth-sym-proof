@@ -338,7 +338,7 @@ fn run(path: &str) -> Result<(), String> {
     // We are proving the following statement:
     //
     //      forall n,
-    //          Max > 2n + 3 ->
+    //          Max > 2n + 1 ->
     //          let i := Max - 2n in
     //          (i > 1) ->
     //          (Max > i + 1) ->
@@ -350,7 +350,8 @@ fn run(path: &str) -> Result<(), String> {
     // single bound variable (`n`) in `Hsucc`.
 
     // End of the execution is Max - 1, to avoid trouble at the baoundary
-    let max_loops = Term::sub(u64::MAX.into(),2.into());
+    let target_below_max = 2; 
+    let max_loops = Term::sub(u64::MAX.into(),target_below_max.into());
     // Write i in terms of n (n increases, i decreases)
     let i_from_n = |n| (Term::sub(max_loops,Term::mull(2.into(), n)));
     
@@ -430,8 +431,8 @@ fn run(path: &str) -> Result<(), String> {
 		    
 		    // n+1 > 0 ->
 		    // Max > 2n+2 ->
-		    // Max > (Max - 2 - 2n ) + 1
-		    println!("==== ADMIT: \n\tn+1 > 0 ->\n\tMax > 2n+2 -> \n\tMax > (Max - 2 - 2n ) + 1");
+		    // Max > (max_loops - 2n ) + 1
+		    println!("==== ADMIT: \n\tn+1 > 0 ->\n\tMax > 2n+2 -> \n\tMax > (max_loops - 2n ) + 1");
 		    pf.show_prop((1,0));
 		    pf.show_prop((2,0));
 		    let _i1_no_over = pf.tactic_admit(
@@ -445,7 +446,7 @@ fn run(path: &str) -> Result<(), String> {
 		    // pf.show_context();
 		    // println!("============ END Context");
 		    
-		    println!("==== Apply P_iter");
+		    println!("==== Apply P_iter to {:?}", i_sub_2);
 		    let _p_first = pf.tactic_apply(p_iter, &[b, i_sub_2]);
 		    
 		    
@@ -529,7 +530,7 @@ fn run(path: &str) -> Result<(), String> {
     let initial_n = {
 	// current value of r8
 	let r8_val = conc_state.regs[8];
-	let diff = u64::MAX - r8_val - 2;
+	let diff = u64::MAX - r8_val - target_below_max;
 	if diff%2 != 0{
 	    eprintln!("=== Error, Max-r[8] should be even, but r[8]={}, Max={}", r8_val, u64::MAX)
 	}
@@ -542,9 +543,9 @@ fn run(path: &str) -> Result<(), String> {
     let p_loop_n = pf.tactic_apply0(p_loop_n);
     println!("==== Apply p_loop_n");
     
-    // println!("============ Context");
-    // pf.show_context();
-    // println!("============ END Context");
+    println!("============ Context");
+    pf.show_context();
+    println!("============ END Context");
     let p_exec = pf.tactic_apply(p_loop_n, &[conc_state.cycle.into()]);
 
 
