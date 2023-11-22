@@ -1,6 +1,6 @@
-//! Proof that sqrt runs for at least ??? steps.  We first run the program concretely up to the
-//! start of the loop (~??? steps), then we show that the loop will run for
-//! at least ?? iterations (~?? steps).
+//! Proof that sqrt runs for at least 5e22 steps.  We first run the program concretely up to the
+//! start of the loop (~5492249 steps), then we show that the loop will run for
+//! at least (~ u64::MAX-13) iterations (~5e22 steps).
 //!
 //! Usage:
 //! ```
@@ -35,7 +35,12 @@ fn run(path: &str) -> Result<(), String> {
     eprintln!("loaded memory: {} words", init_state.mem.len());
     trace!("initial regs = {:?}", init_state.regs);
 
+    // ----------------------------------------
     // Load advice
+    // ----------------------------------------
+
+    
+    eprintln!("=== Load advice");
     let mut advs:HashMap<u64, u64> = HashMap::new();
     // Iterate through all the advices (i.e. MemOps, Stutter, Advice)
     // and only keep the `Advice` ones.
@@ -48,19 +53,16 @@ fn run(path: &str) -> Result<(), String> {
             }
         }
     }
-    eprintln!("loaded advice");
     
     // ----------------------------------------
     // Run the concrete prefix
     // ----------------------------------------
 
     let mut conc_state = init_state;
-    // LBB831_734#20819 (pc=253846) is near the loop, but slighly after the start.
-    let loop_label = ".LBB831_734#20819"; //What about .LBB713_45#19734
-    // The loop starts at pc = 253854;
-    //]let loop_addr = 253854; //
+    let loop_label = ".LBB831_734#20819";
     let loop_addr = exec.labels[loop_label];
-    eprintln!("Starting concrete execution until address: {} ", loop_addr);
+    
+    eprintln!("=== Concrete execution until pc={} ", loop_addr);
     while conc_state.pc != loop_addr {
 	let conc_pc : Addr = conc_state.pc;
         let instr = prog[conc_pc];
@@ -69,51 +71,53 @@ fn run(path: &str) -> Result<(), String> {
 	let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
         conc_state.step(instr, adv);
     }
-
-    eprintln!("STOPed the first run of concrete execution. Pc {}. Cycle {}", conc_state.pc, conc_state.cycle);
+    eprintln!("\tConcretely reached {} in {} cycle.", conc_state.pc, conc_state.cycle);
     
-
-    // TODO: remmove this looping and make it lean.
-    let num_loops = 10;
-    eprintln!("Now lets go around {} loops to see how registers change", num_loops);
-    let mut last_cycle_seen = conc_state.cycle;
-    // record the registers
-    let mut reg_log = vec![vec![0; num_loops]; conc_state.regs.len()];
-
-    for li in 0 .. num_loops{
-	// Do a step to move away from the label
-	let instr = prog[conc_state.pc];
-	let cyc = conc_state.cycle;
-	// For some reason the cycle is off by one wrt advice
-	let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
-        conc_state.step(instr, adv);
-	
-	// The run until the label is found again
-	while conc_state.pc != loop_addr {
-            let instr = prog[conc_state.pc];
+    // ----------------------------------------
+    // For diagnostics on registers
+    // Change num_loops=10 to see what
+    // registers change and which ones don't
+    // ----------------------------------------
+    let num_loops = 0;
+    if (num_loops > 0) {
+	eprintln!("Now lets go around {} loops to see how registers change", num_loops);
+	let mut last_cycle_seen = conc_state.cycle;
+	// record the registers
+	let mut reg_log = vec![vec![0; num_loops]; conc_state.regs.len()];
+    
+	for li in 0 .. num_loops{
+	    // Do a step to move away from the label
+	    let instr = prog[conc_state.pc];
 	    let cyc = conc_state.cycle;
 	    // For some reason the cycle is off by one wrt advice
 	    let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
             conc_state.step(instr, adv);
+	    
+	    // The run until the label is found again
+	    while conc_state.pc != loop_addr {
+		let instr = prog[conc_state.pc];
+		let cyc = conc_state.cycle;
+		// For some reason the cycle is off by one wrt advice
+		let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
+		conc_state.step(instr, adv);
+	    }
+	    eprintln!{"Loop diagnostic {}: Loop took {} cycles", li, conc_state.cycle - last_cycle_seen};
+	    last_cycle_seen = conc_state.cycle;
+	    
+	    for (ri, &x) in conc_state.regs.iter().enumerate() {
+		reg_log[ri][li] = x;
+	    }
 	}
-	eprintln!{"Testing the loop: Loop took {} cycles", conc_state.cycle - last_cycle_seen};
-	last_cycle_seen = conc_state.cycle;
-
-	for (ri, &x) in conc_state.regs.iter().enumerate() {
-	    reg_log[ri][li] = x;
+	
+	eprintln!("Log of registers during the loop diagnostic ");
+	for (i, &x) in conc_state.regs.iter().enumerate() {
+            eprintln!("{:2}: {:?}", i, reg_log[i]);
 	}
     }
-
-    eprintln!("Log of registers during the loop ");
-    for (i, &x) in conc_state.regs.iter().enumerate() {
-        eprintln!("{:2}: {:?}", i, reg_log[i]);
-    }
-
     
     // ----------------------------------------
     // Set up the proof state
     // ----------------------------------------
-    
     let mut pf = Proof::new(prog);
 
 
@@ -121,12 +125,7 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
     // Build the minimal memory for the loop
     // ----------------------------------------
-    // TODO this could be done in a separate state. Or even do once
-    // and store in a file.  We store the first time an address is
-    // loaded with the value.
-    // TODO: We could skip addresses that where stored first, but this
-    // gets odd with the byte addressing.
-    eprintln!("Now lets go around once more to register memory usage.");
+    eprintln!("=== Build the symbolic memory.");
     let mut load_mem  : HashSet<(Addr, MemWidth, Word)> = HashSet::new();
     
     // Do a step to move away from the label
@@ -149,12 +148,7 @@ fn run(path: &str) -> Result<(), String> {
             Opcode::Load(w) => {
 		let addr = conc_state.operand_value(instr.op2);
 		load_mem.insert((addr, w, pc));
-		// eprintln!("LOAD - {} : {} <- {} ", pc, addr, (conc_state.regs[instr.rd as usize]) );
             },
-            Opcode::Store(w) => {
-		let addr = conc_state.operand_value(instr.op2);
-		//eprintln!("STORE - {} : {} <- {} ", pc, addr, (conc_state.regs[instr.r1 as usize]) );
-            }
 	    _ => ()
 	}
     }
@@ -215,136 +209,123 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
 
     // We first prove a lemma of the form:
-    //      forall b n, i > 0 -> ???
-    //                  R({r10 = i, concrete_regs}, b) -> R({r10 = i + 2, concrete_regs}, b + 5460)
-    // The proof is done by running symbolic execution.
-    eprintln!("\nprove p_iter");
+    //      forall b n,
+    //          i > 0 ->
+    //          Max > i + 1 ->
+    //          reach(st_loop(i), b) ->
+    //          reach(st_loop(i + 2), b + 5460) ->
+    eprintln!("\n# Prove p_iter");
     let p_iter = pf.tactic_forall_intro(
         |vars| {
-            // Set up the variables and premises.  There is only one variable, `n`, and only
-            // one premise, `n > 0`.  The `Term` representing `n` will be passed through to the
-            // proof callback.
+	    // forall b i, 
             let b = vars.fresh();
-            //let forget_var = vars.fresh();
             let i = vars.fresh();
-
             (vec![
-		// i > 0
+		// i > 1 -> 
                 Prop::Nonzero(Term::cmpa(i.clone(), 1.into())),
-		// MAX_unsigned > i+1
+		// MAX > i+1 -> 
                 Prop::Nonzero(Term::cmpa((u64::MAX).into(),Term::add(1.into(), i.clone()))),
-		// reach(c, st_loop(i))
+		// reach(c, st_loop(i)) -> 
 		mk_prop_reach(i, b.clone()),
             ], i)
         },
         |pf, i| {
-            // The reachability is in the next context (1) and it is
-            // the fourth prop (3)
+	    // The reachability hypothesis must bt the first one. It
+	    // is in the next context (1) and it is the third prop (2)
             let p_reach = (1, 2);
 
-	    // ((1 == a1) == 0)
-	    let i_not_0 = pf.tactic_admit(
+	    // i > 1 -> ((1 == i) == 0)
+	    let i_gt_1 = (1,0);
+	    let i1_bound = (1,1);
+	    
+	    println!("==== ADMIT: \n\t i > 1 -> ((1 == i) == 0)");
+	    pf.show_prop(i_gt_1);
+	    let _i_not_0 = pf.tactic_admit(
 		Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), i.clone()), 0.into())));
-	    // ((1 == (a1 + 1)) == 0)
+	    // i > 1 ->  MAX > i+1 ->  ((1 == (i + 1)) == 0)
+	    println!("==== ADMIT: \n\t i > 1 ->  MAX > i+1 -> -> ((1 == (i + 1)) == 0)");
+	    pf.show_prop(i_gt_1);
+	    pf.show_prop(i1_bound);
 	    let i1_not_0 = pf.tactic_admit(
 		Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), Term::add(i.clone(), 1.into())), 0.into())));
 
-            let (p_reach, i1_not_0) = pf.tactic_swap(p_reach, i1_not_0);
-            // let _ = (p_ne,i1_not_0);
-
+            let (p_reach, _i1_not_0) = pf.tactic_swap(p_reach, i1_not_0);
+            
             pf.tactic_reach_extend(p_reach, |rpf| {
 		
-		rpf.show_state();
+		// rpf.show_state();
 
 		// Define the proof for one single loop iteration.
 		let mut one_loop_proof = |n:&mut u32| -> () {
-		    eprintln!("{}. Concretely until the symbolic step. pc {}, cycle {:?}", n,
+		    eprintln!("\t=== {}. Concretely until the symbolic step. pc {}, cycle {:?}", n,
 			      rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
 		    rpf.tactic_run_concrete();
 		    *n += 1;
 		    
-		    eprintln!("{}. Symbolic comparison symbolic step. pc {}, cycle {:?}", n,
+		    eprintln!("\t=== {}. Symbolic comparison symbolic step. pc {}, cycle {:?}", n,
 			      rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
                     rpf.rule_step();
 		    //rpf.show_state();
 		    *n += 1;
 		    
-		    eprintln!("{}. Replace the symbolic comparison with concrete value.  (i==1) -> 0. pc {}, cycle {:?}", n,
+		    eprintln!("\t=== {}. Replace the symbolic comparison with concrete value.
+			       (i==1) -> 0. pc {}, cycle {:?}", n,
 			      rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
 		    rpf.rule_rewrite_reg(32,Term::const_(0));
 		    *n += 1;
 		    
-		    eprintln!("{}. Concretely until the symb. store. pc {}, cycle {:?}", n,
+		    eprintln!("\t=== {}. Concretely until the symb. store. pc {}, cycle {:?}", n,
 			      rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
                     rpf.tactic_run_concrete();
 		    *n += 1;
 		    
-		    eprintln!("{}. Symbolic store the i, with the rule_step", n);
+		    eprintln!("\t=== {}. Symbolic store the i, with the rule_step", n);
                     rpf.rule_step();
-		    rpf.show_state();
+		    // rpf.show_state();
 		    *n += 1;
 		    
-                    eprintln!("{}. Concretely (long) until the increment of i. pc {}, cycle {:?}", n,
+                    eprintln!("\t=== {}. Concretely (long) until the increment of i. pc {}, cycle {:?}", n,
 			      rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
                     rpf.tactic_run_concrete();
 		    //rpf.show_state();
 		    *n += 1;
 		    
-		    eprintln!("{}. Symbolic: increment the counter", n);
+		    eprintln!("\t=== {}. Symbolic: increment the counter", n);
                     rpf.rule_step();
 		    //rpf.show_state();
 		    *n += 1;
 		    
 		    
-		    eprintln!("{}. Concrete until the symbolic substraction. pc {}, cycle {:?}", n,
+		    eprintln!("\t=== {}. Concrete until the symbolic substraction. pc {}, cycle {:?}", n,
 			      rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
 		    rpf.tactic_run_concrete();
 		    //rpf.show_state();
 		    *n += 1;
 		    
 		    // Why is i first substracted and then stored?
-		    eprintln!("{}. Symbolic substraction and store `sp <- (i-1)`, with the rule_step", n);
+		    eprintln!("\t=== {}. Symbolic substraction and store `sp <- (i-1)`, with the rule_step", n);
                     rpf.rule_step(); // 253801. %11 = %8 + -1
 		    rpf.rule_step(); //253802. %32 = %ax + 88
 		    rpf.rule_step(); // 253803.	*(%32) = %11
-		    rpf.show_state();
+		    // rpf.show_state();
 		    *n += 1;
 		    
 		    
-		    eprintln!("{}. Run until Beggining, wash and repeat", n);
+		    eprintln!("\t=== {}. Run until Beggining, wash and repeat", n);
 		    rpf.tactic_run_until(loop_addr);
-		    rpf.show_state();
+		    // rpf.show_state();
 		    *n += 1;
 		};
 
 		// Apply the proof to two loops.
 		let steps_counter: &mut u32 = &mut 1;
+		println!("=== Prove the first loop");
 		one_loop_proof(steps_counter);
+		println!("=== Prove the second loop");
 		one_loop_proof(steps_counter);
-		
-                
-                // Erase information about memory and certain registers to make it easier to
-                // sequence this `StepProp` with itself.
-                // for &r in &[11, 13, 14, 15, 32] {
-                //     rpf.rule_forget_reg(r);
-                // }
-                // rpf.rule_forget_mem();
 
             });
 
-            // // Rename variables so the final state uses the same names as the initial state.
-            // pf.tactic_reach_rename_vars(p_reach, |vars| {
-            //     let mut var_map = [None; 39];
-            //     for i in 0 .. 33 {
-            //         var_map[i] = Some(vars.fresh_var().index());
-            //     }
-            //     var_map[34] = var_map[11];
-            //     var_map[35] = var_map[13];
-            //     var_map[36] = var_map[14];
-            //     var_map[37] = var_map[15];
-            //     var_map[38] = var_map[32];
-            //     var_map
-            // });
         },
     );
 
@@ -352,6 +333,7 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
     // Prove the full loop by induction
     // ----------------------------------------
+    println!("=== Prove the full loop by induction");
 
     // We are proving the following statement:
     //
@@ -372,7 +354,7 @@ fn run(path: &str) -> Result<(), String> {
     // Write i in terms of n (n increases, i decreases)
     let i_from_n = |n| (Term::sub(max_loops,Term::mull(2.into(), n)));
     
-    eprintln!("\nprove p_loop");
+    eprintln!("\n#prove p_loop");
     let p_loop = pf.tactic_induction(
         Prop::Forall(Binder::new(|vars| {
 	    //      forall n,
@@ -390,9 +372,9 @@ fn run(path: &str) -> Result<(), String> {
 		let i:Term = i_from_n(n);
 		//      forall b,
                 let b = vars.fresh();
-		//          reach(b, st_loop(i)) ->
+		//          reach(st_loop(i), b) ->
                 let p = mk_prop_reach(i, b);
-		//          reach(b + n * 5460, st_loop(max))
+		//          reach(st_loop(max), b + n * 5460)
                 let q = mk_prop_reach(max_loops, Term::add(b, Term::mull(n, 5460.into())));
                 (vec![p].into(), Box::new(q))
             }));
@@ -428,10 +410,9 @@ fn run(path: &str) -> Result<(), String> {
                 |pf, b| {
 
 		    
-		    // println!("==== Context");
+		    // println!("============ Context");
 		    // pf.show_context();
-		    // println!("==== END Context");
-		    
+		    // println!("============ END Context");
                     let n = n.shift();
                     let n_plus_1 = Term::add(n, 1.into());
 
@@ -443,7 +424,7 @@ fn run(path: &str) -> Result<(), String> {
 		    // (Max >u 2n + 3) -> (i > 1)
 		    println!("==== ADMIT: \n\t(Max >u 2n + 3) -> (i > 1)");
 		    pf.show_prop((2,0));
-		    let i_gt_1 = pf.tactic_admit(
+		    let _i_gt_1 = pf.tactic_admit(
 			Prop::Nonzero(Term::cmpa(i, 1.into())));
 
 		    
@@ -453,19 +434,18 @@ fn run(path: &str) -> Result<(), String> {
 		    println!("==== ADMIT: \n\tn+1 > 0 ->\n\tMax > 2n+2 -> \n\tMax > (Max - 2 - 2n ) + 1");
 		    pf.show_prop((1,0));
 		    pf.show_prop((2,0));
-		    let i1_no_over = pf.tactic_admit(
+		    let _i1_no_over = pf.tactic_admit(
 			Prop::Nonzero(Term::cmpa(u64::MAX.into(),
 						 Term::add(Term::sub(max_loops, Term::mull(n,2.into())), 1.into()))));
 
-		    println!("==== CLone P_iter");
+		    println!("==== Clone P_iter");
 		    let p_iter = pf.tactic_clone(p_iter);
 
-		     
-		    // println!("==== Context");
+		    // println!("============ Context");
 		    // pf.show_context();
-		    // println!("==== END Context");
+		    // println!("============ END Context");
 		    
-		    println!("==== apply P_iter");
+		    println!("==== Apply P_iter");
 		    let _p_first = pf.tactic_apply(p_iter, &[b, i_sub_2]);
 		    
 		    
@@ -473,41 +453,41 @@ fn run(path: &str) -> Result<(), String> {
 		    // (Max >u (2n + 1))
 		    println!("==== ADMIT: \n\t(Max >u (2n + 3)) ->\n\t(Max >u (2n + 1))");
 		    pf.show_prop((2,0));
-		    let IndHyp_H0 = pf.tactic_admit(
+		    let _IndHyp_H1 = pf.tactic_admit(
 			Prop::Nonzero(Term::cmpa(u64::MAX.into(),
 						 Term::add(Term::mull(n,2.into()), 1.into()))));
 
-	
-		    // println!("==== Context");
+		    // println!("============ Context");
 		    // pf.show_context();
-		    // println!("==== END Context");
+		    // println!("============ END Context");
 
-		    println!("==== apply induction hypothesis");
+		    println!("==== Apply induction hypothesis, first bind");
 		    let p_ind = pf.tactic_clone((1, 1));
                     let p_rest = pf.tactic_apply0(p_ind);
 
 		    
                     let expected_cycles =
 			Term::add(b, Term::add(Term::mull(n, 5460.into()), 5460.into()));
+		    
+		    // (b + (n*5460 + 5460)) == (b + 5460) + n*5460
+		    println!("==== ADMIT: (b + (n*5460 + 5460)) == (b + 5460) + n*5460");
                     pf.tactic_admit(Prop::Nonzero(Term::cmpe(
                         Term::add(Term::add(b, 5460.into()), Term::mull(n, 5460.into())),
                         expected_cycles,
                     )));
 
-		    
-		    // println!("==== Context");
-		    // pf.show_context();
-		    // println!("==== END Context");
 
+		    // println!("============ Context");
+		    // pf.show_context();
+		    // println!("============ END Context");
 
 		    // reach(b + 5460, st_loop(i_sub_2 + 2)) ->
 		    // reach(b + 5460, st_loop(i)
 		    println!("==== ADMIT: \n\treach(b + 5460, st_loop(i_sub_2 + 2)) ->\n\treach(b + 5460, st_loop(i)");
 		    pf.show_prop((3,4));
-		    let IndHyp_H0 = pf.tactic_admit(  mk_prop_reach(i, Term::add(b,5460.into())));
+		    let _IndHyp_H0 = pf.tactic_admit(  mk_prop_reach(i, Term::add(b,5460.into())));
 
-		    println!("==== apply induction hypothesis AGAIN");
-
+		    println!("==== Apply induction hypothesis, second bind");
                     let p_final = pf.tactic_apply(p_rest, &[Term::add(b, 5460.into())]);
                     
 		    
@@ -524,7 +504,7 @@ fn run(path: &str) -> Result<(), String> {
     // Prove the full execution
     // ----------------------------------------
 
-    eprintln!("\nprove p_exec");
+    eprintln!("\n#Prove p_exec");
     // `conc_state` is reachable.
     let p_conc = pf.tactic_admit(Prop::Reachable(ReachableProp {
         pred: Binder::new(|_vars| {
@@ -540,22 +520,6 @@ fn run(path: &str) -> Result<(), String> {
         }),
         min_cycles: conc_state.cycle.into(),
     }));
-
-    // println!("==== Context");
-    // pf.show_context();
-    // println!("==== END Context");
-
-    // Modify `p_conc` to match the premise of `p_loop`.
-    pf.tactic_reach_extend(p_conc, |rpf| {
-        for r in 0 .. 33 {
-            if r == 8 {
-                // Pad out the variable numbering to align with p_loop.
-                //rpf.rule_var_fresh();
-            } else {
-		// no op
-            }
-        }
-    });
 
     
 
@@ -578,15 +542,16 @@ fn run(path: &str) -> Result<(), String> {
     let p_loop_n = pf.tactic_apply0(p_loop_n);
     println!("==== Apply p_loop_n");
     
-    // println!("==== Context");
+    // println!("============ Context");
     // pf.show_context();
-    // println!("==== END Context");
+    // println!("============ END Context");
     let p_exec = pf.tactic_apply(p_loop_n, &[conc_state.cycle.into()]);
 
 
-    println!("\nfinal theorem:\n{}", pf.print(&pf.props()[p_exec.1]));
-
-    println!("ok");
+    println!("\n============");
+    println!("Final theorem:\n{}", pf.print(&pf.props()[p_exec.1]));
+    println!("============\n");
+    println!("Ok: Proof verified");
     Ok(())
 }
 
