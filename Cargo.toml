@@ -55,6 +55,18 @@ stage3 = [
     "playback_avec_len",
     "playback_amap_keys",
     "playback_amap_access",
+    "recording_linear",
+]
+stage4 = [
+    "playback_rules",
+    "playback_search_index",
+    "playback_term_table",
+    "playback_term_index",
+    "playback_term_intern_index",
+    "playback_avec_len",
+    "playback_amap_keys",
+    "playback_amap_access",
+    "playback_linear",
 ]
 
 recording_rules = []
@@ -75,5 +87,7 @@ recording_amap_keys = []
 playback_amap_keys = []
 recording_amap_access = []
 playback_amap_access = []
+recording_linear = []
+playback_linear = []
 
 # When adding new advice streams, be sure to update `doc/advice.md`.

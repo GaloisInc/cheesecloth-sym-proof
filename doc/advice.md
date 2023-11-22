@@ -167,3 +167,15 @@ Each value in the stream is an index into the entries of a map, and the number
 and order of entries depends on the complete key set across the lifetime of the
 map.  So those indices can't be computed until the full key set (as recorded in
 `amap_keys`) is known.
+
+## `linear`
+
+Consists of all previous advice streams (except `term_table`) flattened into a
+single linear sequence.  Different streams are interleaved as needed based on
+the order in which they are used.  This stream is the final output of advice
+generation and can be passed to the MicroRAM interpreter for use when building
+the program trace.
+
+Dependencies:
+
+* After all other advice streams

@@ -244,6 +244,9 @@ impl PlaybackStream {
         assert!(self.inited, "tried to read from uninitialized stream");
         assert!(self.pos < self.buf.len(), "tried to read past end of stream (at {})", self.pos);
         let v = self.buf[self.pos];
+        #[cfg(feature = "recording_linear")] {
+            recording::linear::Tag.put(v);
+        }
         self.pos += 1;
         v
     }
@@ -300,7 +303,7 @@ pub trait PlaybackStreamTag: Sized + Copy {
     }
 }
 
-macro_rules! playback_stream {
+macro_rules! playback_stream_inner {
     ($name:ident) => {
         pub mod $name {
             use std::cell::RefCell;
@@ -320,6 +323,26 @@ macro_rules! playback_stream {
             }
         }
     };
+}
+
+macro_rules! playback_stream_alias_for_linear {
+    ($name:ident) => {
+        pub mod $name {
+            pub use super::linear::Tag;
+        }
+    };
+}
+
+#[cfg(not(feature = "playback_linear"))]
+macro_rules! playback_stream {
+    ($name:ident) => { playback_stream_inner!($name); };
+}
+
+// With `playback_linear` enabled, all playback streams are replace with aliases for `linear`.
+#[cfg(feature = "playback_linear")]
+macro_rules! playback_stream {
+    (linear) => { playback_stream_inner!(linear); };
+    ($name:ident) => { playback_stream_alias_for_linear!($name); };
 }
 
 
@@ -891,6 +914,7 @@ pub mod recording {
     chunked_recording_stream!(avec_len);
     chunked_recording_stream!(amap_keys);
     recording_stream!(amap_access);
+    recording_stream!(linear);
 }
 
 pub mod playback {
@@ -904,6 +928,7 @@ pub mod playback {
     playback_stream!(avec_len);
     playback_stream!(amap_keys);
     playback_stream!(amap_access);
+    playback_stream!(linear);
 }
 
 
@@ -915,6 +940,15 @@ fn load_file(path: impl AsRef<Path>, ps: impl PlaybackStreamTag) -> Result<(), S
     Ok(())
 }
 
+fn load_term_table_from_file(path: impl AsRef<Path>) -> Result<(), String> {
+    let path = path.as_ref();
+    let f = File::open(path).map_err(|x| x.to_string())?;
+    term_table::playback::load(f).map_err(|x| x.to_string())?;
+    eprintln!("loaded advice: {path:?}");
+    Ok(())
+}
+
+#[cfg(not(feature = "playback_linear"))]
 pub fn load() -> Result<(), String> {
     #[cfg(feature = "playback_rules")] {
         load_file("advice/rules.cbor", playback::rules::Tag)?;
@@ -925,10 +959,7 @@ pub fn load() -> Result<(), String> {
         load_file("advice/terms.cbor", playback::terms::Tag)?;
     }
     #[cfg(feature = "playback_term_table")] {
-        let path = "advice/term_table.cbor";
-        let f = File::open(path).map_err(|x| x.to_string())?;
-        term_table::playback::load(f).map_err(|x| x.to_string())?;
-        eprintln!("loaded advice: {path:?}");
+        load_term_table_from_file("advice/term_table.cbor")?;
     }
     #[cfg(feature = "playback_term_index")] {
         load_file("advice/term_index.cbor", playback::term_index::Tag)?;
@@ -951,6 +982,16 @@ pub fn load() -> Result<(), String> {
 
     Ok(())
 }
+
+#[cfg(feature = "playback_linear")]
+pub fn load() -> Result<(), String> {
+    load_file("advice/linear.cbor", playback::linear::Tag)?;
+    #[cfg(feature = "playback_term_table")] {
+        load_term_table_from_file("advice/term_table.cbor")?;
+    }
+    Ok(())
+}
+
 
 fn finish_file(path: impl AsRef<Path>, rs: impl RecordingStreamTag) -> Result<(), String> {
     let path = path.as_ref();
@@ -1005,6 +1046,9 @@ pub fn finish() -> Result<(), String> {
     }
     #[cfg(feature = "recording_amap_access")] {
         finish_file("advice/amap_access.cbor", recording::amap_access::Tag)?;
+    }
+    #[cfg(feature = "recording_linear")] {
+        finish_file("advice/linear.cbor", recording::linear::Tag)?;
     }
 
     Ok(())
