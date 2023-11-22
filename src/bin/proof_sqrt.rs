@@ -532,7 +532,7 @@ fn run(path: &str) -> Result<(), String> {
                 state: symbolic::State {
                     pc: conc_state.pc,
                     regs: conc_state.regs.map(|x| x.into()),
-                    mem: MemState::Log(MemLog::new()),
+                    mem: MemState::Map(init_mem_map(conc_state.regs[8].into()).unwrap()),
 		    conc_st: Some (conc_state.clone()),
                 },
                 props: Box::new([]),
@@ -541,9 +541,9 @@ fn run(path: &str) -> Result<(), String> {
         min_cycles: conc_state.cycle.into(),
     }));
 
-    println!("==== Context");
-    pf.show_context();
-    println!("==== END Context");
+    // println!("==== Context");
+    // pf.show_context();
+    // println!("==== END Context");
 
     // Modify `p_conc` to match the premise of `p_loop`.
     pf.tactic_reach_extend(p_conc, |rpf| {
@@ -571,15 +571,16 @@ fn run(path: &str) -> Result<(), String> {
 	}
 	diff/2
     };
+    println!("==== Initial n = {}", initial_n);
     let p_loop_n = pf.tactic_apply(p_loop, &[initial_n.into()]);
     pf.rule_trivial();
     println!("==== Apply p_loop 2");
     let p_loop_n = pf.tactic_apply0(p_loop_n);
     println!("==== Apply p_loop_n");
     
-    println!("==== Context");
-    pf.show_context();
-    println!("==== END Context");
+    // println!("==== Context");
+    // pf.show_context();
+    // println!("==== END Context");
     let p_exec = pf.tactic_apply(p_loop_n, &[conc_state.cycle.into()]);
 
 
