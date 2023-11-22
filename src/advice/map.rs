@@ -278,18 +278,8 @@ mod imp_box {
 
     impl<K: PartialEq, V: PartialEq> PartialEq for AMap<K, V> {
         fn eq(&self, other: &AMap<K, V>) -> bool {
-            let ps = advice::playback::amap_access::Tag;
-            // We get the answer as advice, then check to make sure it's accurate.
-            let eq = ps.playback::<bool>();
-            if eq {
-                require!(self.iter().eq(other.iter()),
-                    "bad advice: AMaps are not equal");
-            } else {
-                let e1 = ps.take_elem(&self.data);
-                let e2 = ps.take_elem(&other.data);
-                require!(e1 != e2, "bad advice: provided AMap indices don't differ");
-            }
-            eq
+            // TODO: in the case where `self != other`, this could be accelerated using advice
+            self.iter().eq(other.iter())
         }
     }
 
