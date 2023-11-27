@@ -9,22 +9,17 @@
 // The proof implementation returns `Err` when a rule fails to apply.  A bad proof will be caught
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
-use std::array;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::env;
 use env_logger;
 use log::trace;
-use sym_proof::{Word, Addr};
+use sym_proof::Addr;
 use sym_proof::advice;
 use sym_proof::interp;
 use sym_proof::kernel::Proof;
-use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred};
-use sym_proof::logic::shift::ShiftExt;
 use sym_proof::micro_ram::Program;
 use sym_proof::micro_ram::import;
-use sym_proof::micro_ram::{Opcode, MemWidth, mem_load};
-use sym_proof::symbolic::{self, MemState, MemLog, Memory, MemMap, MemConcrete};
-use sym_proof::tactics::{Tactics, ReachTactics};
+use sym_proof::tactics::Tactics;
 use witness_checker::micro_ram::types::Advice;
 
 fn run(path: &str) -> Result<(), String> {
@@ -107,7 +102,7 @@ fn run(path: &str) -> Result<(), String> {
     }
 
     eprintln!("Log of registers during the loop ");
-    for (i, &x) in conc_state.regs.iter().enumerate() {
+    for (i, &_x) in conc_state.regs.iter().enumerate() {
         eprintln!("{:2}: {:?}", i, reg_log[i]);
     }
 

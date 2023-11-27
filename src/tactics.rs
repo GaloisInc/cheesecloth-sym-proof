@@ -247,7 +247,7 @@ pub trait ReachTactics<'a, 'b: 'a> {
     /// Apply `rule_step` repeatedly until it returns `Err`, showing the error when it fails
     fn tactic_run_db(&mut self) {
         let pf = self.proof_mut();
-        while true {
+        loop {
             match pf.try_rule_step() {
                 Err (msg) => {
                     eprintln!("Simple step failed with {}", msg);
@@ -261,7 +261,7 @@ pub trait ReachTactics<'a, 'b: 'a> {
     /// Apply `rule_step` repeatedly until it returns `Err`, showing the error when it fails
     fn tactic_run_concrete(&mut self) {
         let pf = self.proof_mut();
-        while true {
+        loop {
             match pf.try_rule_step_concrete() {
                 Err (msg) => {
                     eprintln!("Concrete step failed with {}", msg);

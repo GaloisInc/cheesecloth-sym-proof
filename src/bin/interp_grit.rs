@@ -9,19 +9,15 @@
 // The proof implementation returns `Err` when a rule fails to apply.  A bad proof will be caught
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
-use std::array;
 use std::env;
 use env_logger;
 use log::trace;
 use sym_proof::advice;
 use sym_proof::interp;
 use sym_proof::kernel::Proof;
-use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred};
-use sym_proof::logic::shift::ShiftExt;
 use sym_proof::micro_ram::Program;
 use sym_proof::micro_ram::import;
-use sym_proof::symbolic::{self, MemState, MemLog};
-use sym_proof::tactics::{Tactics, ReachTactics};
+use sym_proof::tactics::Tactics;
 
 fn run(path: &str) -> Result<(), String> {
     let exec = import::load_exec(path);

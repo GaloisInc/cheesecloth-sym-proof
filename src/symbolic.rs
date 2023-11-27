@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::{Word, WORD_BYTES, WORD_BITS, Addr};
+use crate::{Word, WORD_BYTES, Addr};
 use crate::advice::map::AMap;
 use crate::advice::vec::AVec;
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand, Instr};
@@ -190,14 +190,6 @@ impl EqShifted for MemConcrete {
 }
 
 
-fn extract_subword(t_const: Word, width: Word, offset: u8) -> Word {
-    let WORD_SIZE : u64 = WORD_BITS / WORD_BYTES;
-    let mask = (1u64 << width) - 1; // Create a mask with 'width' bits set to 1
-    let shifted_mask = mask << (offset as u64 * WORD_SIZE); // Shift the mask to the desired position
-
-    (t_const & shifted_mask) >> (offset as u64 * WORD_SIZE) // Apply the mask and shift to get the subword
-}
-
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemMap {
     /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
@@ -299,7 +291,6 @@ impl MemMap {
     fn load_concrete_splice(&self, w: MemWidth, addr: Word) -> Result<Word, String> {
         // Initialize the result word
         let mut result_word: u64 = 0;
-        let mut byte: u64 = 0;
 
         for offset in 0 .. w.bytes() {
             match self.m.get(&(addr + offset)) {
@@ -307,7 +298,7 @@ impl MemMap {
                     // Require t to be concrete
                     match t.as_const() {
                         Some(val) => {
-                            byte = (val >> (loaded_offset * 8)) & (0xFF);
+                            let byte = (val >> (loaded_offset * 8)) & (0xFF);
                             result_word = result_word | (byte << offset * 8) as u64
                         },
                         None =>
@@ -675,11 +666,16 @@ impl State {
         mem: MemState,
         conc_st: Option<micro_ram::State>,
     ) -> State {
-        State { pc,
-                regs,
-                mem,
-                #[cfg(feature = "debug_symbolic")]
-                conc_st}
+        #[cfg(not(feature = "debug_symbolic"))]
+        let _ = conc_st;
+
+        State {
+            pc,
+            regs,
+            mem,
+            #[cfg(feature = "debug_symbolic")]
+            conc_st,
+        }
     }
 
     pub fn pc(&self) -> Word {
@@ -717,24 +713,25 @@ impl State {
             conc_state.step(instr, advice);
             self.validate().unwrap();
         }
+        #[cfg(not(feature = "debug_symbolic"))]
+        let _ = (instr, advice);
     }
-    
+
     #[cfg(feature = "debug_symbolic")]
     pub fn conc_pc(&self) -> Option <Addr> {
         self.conc_st.as_ref().map(|st| st.pc).clone()
     }
-    
+
     // Validate the symbolic state, as a predicate, over the concrete
     // state conc_st, which should be executed in parallel to the
     // symbolic state.
     #[cfg(feature = "debug_symbolic")]
     pub fn validate(&self) -> Result<(), String> {
         #[cfg(feature = "debug_symbolic")]
-        match &self.conc_st
-        {
-            Some (cst) => self.validate_conc_state(cst),
-            None => return Ok(())
-        }       
+        match self.conc_st {
+            Some(ref cst) => self.validate_conc_state(cst),
+            None => Ok(())
+        }
     }
 
     // Validate the symbolic state, as a predicate, over some provided
@@ -749,7 +746,7 @@ impl State {
         }
         return Ok(())
     }
-    
+
     #[cfg(feature = "debug_symbolic")]
     fn validate_pc(&self, conc_pc: &Addr) -> Result<(), String> {
         if self.pc != *conc_pc{
@@ -779,7 +776,7 @@ impl State {
 
     
     #[cfg(feature = "debug_symbolic")]
-    fn validate_mem(&self, conc_mem: &HashMap<u64, u64>) -> Result<(), String> {
+    fn validate_mem(&self, _conc_mem: &HashMap<u64, u64>) -> Result<(), String> {
         // Not yet implemented
         return Ok(())
     }

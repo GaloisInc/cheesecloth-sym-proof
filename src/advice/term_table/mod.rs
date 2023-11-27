@@ -1,6 +1,4 @@
-use std::collections::HashMap;
 use std::convert::TryInto;
-use std::io::{Read, Write};
 use crate::BinOp;
 use crate::logic::{Term, TermKind, VarId};
 use serde::{Serialize, Deserialize};
@@ -32,6 +30,7 @@ impl RawTermKind {
 
 
 impl RawTermKind {
+    #[cfg_attr(not(feature = "playback_term_table"), allow(dead_code))]
     fn to_term_kind(&self, mut convert_term: impl FnMut(usize) -> Term) -> TermKind {
         match self.tag {
             RawTermKind::TAG_CONST => {

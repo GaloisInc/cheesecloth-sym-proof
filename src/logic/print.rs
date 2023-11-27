@@ -283,7 +283,7 @@ impl Print for MemState {
 }
 
 impl Print for MemConcrete {
-    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+    fn print(&self, _p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         let mut kvs = self.m.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>();
         kvs.sort();
         for (i, (k, v)) in kvs.into_iter().enumerate() {
@@ -345,19 +345,19 @@ impl Print for MemMap {
 }
 
 impl Print for MemSnapshot {
-    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+    fn print(&self, _p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MemSnapshot @{:x}", self.base)
     }
 }
 
 impl Print for MemLog {
-    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+    fn print(&self, _p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MemLog [{} entries]", self.l.len())
     }
 }
 
 impl Print for MemMulti {
-    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+    fn print(&self, _p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MemMulti [{} parts]", self.conc.len() + self.objs.len() + self.sym.len())
     }
 }

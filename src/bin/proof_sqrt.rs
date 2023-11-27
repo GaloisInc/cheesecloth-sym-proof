@@ -15,15 +15,14 @@ use std::env;
 use env_logger;
 use log::trace;
 use sym_proof::{Word, Addr};
-use sym_proof::advice::{self, RecordingStreamTag};
-use sym_proof::interp::Rule;
+use sym_proof::advice;
 use sym_proof::kernel::Proof;
-use sym_proof::logic::{Term, TermKind, Prop, Binder, VarCounter, ReachableProp, StatePred};
+use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred};
 use sym_proof::logic::shift::ShiftExt;
 use sym_proof::micro_ram::Program;
 use sym_proof::micro_ram::import;
 use sym_proof::micro_ram::{Opcode, MemWidth, mem_load};
-use sym_proof::symbolic::{self, MemState, MemSnapshot, Memory, MemMap, MemConcrete};
+use sym_proof::symbolic::{self, MemState, Memory, MemMap};
 use sym_proof::tactics::{Tactics, ReachTactics};
 use witness_checker::micro_ram::types::Advice;
 
@@ -148,7 +147,7 @@ fn run(path: &str) -> Result<(), String> {
     // registers change and which ones don't
     // ----------------------------------------
     let num_loops = 0;
-    if (num_loops > 0) {
+    if num_loops > 0 {
         eprintln!("Now lets go around {} loops to see how registers change", num_loops);
         let mut last_cycle_seen = conc_state.cycle;
         // record the registers
@@ -593,6 +592,8 @@ fn run(path: &str) -> Result<(), String> {
     println!("Ok: Proof verified");
 
     #[cfg(feature = "recording_rules")] {
+        use sym_proof::advice::RecordingStreamTag;
+        use sym_proof::interp::Rule;
         advice::recording::rules::Tag.record(&Rule::Done);
     }
     advice::finish()?;

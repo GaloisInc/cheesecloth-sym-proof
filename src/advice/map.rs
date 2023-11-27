@@ -2,13 +2,12 @@ use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 
 
 mod imp_btree {
+    #![cfg_attr(feature = "playback_amap_keys", allow(dead_code))]
     use std::borrow::Borrow;
     use std::collections::{BTreeMap, BTreeSet};
     use std::fmt;
     use std::iter::FromIterator;
-    use crate::advice::{
-        self, Record, Playback, RecordingStreamTag, ChunkedRecordingStreamTag, PlaybackStreamTag,
-    };
+    use crate::advice::{self, Record, RecordingStreamTag, ChunkedRecordingStreamTag};
 
     pub struct AMap<K: Record, V> {
         m: BTreeMap<K, V>,
@@ -22,6 +21,7 @@ mod imp_btree {
     }
 
     impl<K: Record> Recording<K> {
+        #[cfg_attr(not(feature = "recording_amap_keys"), allow(dead_code))]
         fn new() -> Recording<K> {
             let rs = advice::recording::amap_keys::Tag.add_chunk();
             Recording {
@@ -61,7 +61,7 @@ mod imp_btree {
     }
 
     impl<K: Ord + Record, V> AMap<K, V> {
-        pub fn remove<Q>(&mut self, k: &Q) -> Option<V>
+        pub fn _remove<Q>(&mut self, k: &Q) -> Option<V>
         where K: Borrow<Q>, Q: Ord + ?Sized {
             self.m.remove(k)
         }
@@ -71,7 +71,7 @@ mod imp_btree {
             self.m.get(k)
         }
 
-        pub fn get_mut<Q>(&mut self, k: &Q) -> Option<&mut V>
+        pub fn _get_mut<Q>(&mut self, k: &Q) -> Option<&mut V>
         where K: Borrow<Q>, Q: Ord + ?Sized {
             self.m.get_mut(k)
         }
@@ -86,7 +86,7 @@ mod imp_btree {
             self.m.iter()
         }
 
-        pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = (&'a K, &'a mut V)> + 'a {
+        pub fn _iter_mut<'a>(&'a mut self) -> impl Iterator<Item = (&'a K, &'a mut V)> + 'a {
             self.m.iter_mut()
         }
 
@@ -127,10 +127,11 @@ mod imp_btree {
 }
 
 mod imp_box {
+    #![cfg_attr(not(feature = "playback_amap_keys"), allow(dead_code))]
     use std::borrow::Borrow;
     use std::fmt;
     use std::iter::FromIterator;
-    use crate::advice::{self, Record, Playback, RecordingStreamTag, PlaybackStreamTag};
+    use crate::advice::{self, Playback, PlaybackStreamTag};
 
     pub struct AMap<K, V> {
         /// Storage for key-value pairs.  This contains an entry for every key that will be
@@ -174,6 +175,7 @@ mod imp_box {
                 match self.data.binary_search_by(|&(ref k2, _)| k2.borrow().cmp(k)) {
                     Ok(i) => {
                         #[cfg(feature = "recording_amap_access")] {
+                            use crate::advice::RecordingStreamTag;
                             advice::recording::amap_access::Tag.record(&i);
                         }
                         return Some(i);
@@ -182,8 +184,10 @@ mod imp_box {
                         // `i` is "the index where a matching element could be inserted while
                         // maintaining sorted order".
                         #[cfg(feature = "recording_amap_access")] {
+                            use crate::advice::RecordingStreamTag;
                             advice::recording::amap_access::Tag.record(&i);
                         }
+                        let _ = i;
                         return None;
                     },
                 }
@@ -214,8 +218,6 @@ mod imp_box {
 
                 return None;
             }
-
-            unreachable!();
         }
 
         pub fn insert(&mut self, k: K, v: V) -> Option<V> {
@@ -230,7 +232,7 @@ mod imp_box {
             old
         }
 
-        pub fn remove<Q>(&mut self, k: &Q) -> Option<V>
+        pub fn _remove<Q>(&mut self, k: &Q) -> Option<V>
         where K: Borrow<Q>, Q: Ord + ?Sized {
             // If this returns `None`, no entry with this key was ever observed when recording
             // advice.
@@ -248,7 +250,7 @@ mod imp_box {
             self.data[i].1.as_ref()
         }
 
-        pub fn get_mut<Q>(&mut self, k: &Q) -> Option<&mut V>
+        pub fn _get_mut<Q>(&mut self, k: &Q) -> Option<&mut V>
         where K: Borrow<Q>, Q: Ord + ?Sized {
             let i = self.get_index(k)?;
             self.data[i].1.as_mut()
@@ -266,7 +268,7 @@ mod imp_box {
             })
         }
 
-        pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = (&'a K, &'a mut V)> + 'a {
+        pub fn _iter_mut<'a>(&'a mut self) -> impl Iterator<Item = (&'a K, &'a mut V)> + 'a {
             self.data.iter_mut().filter_map(|&mut (ref k, ref mut opt_v)| {
                 Some((k, opt_v.as_mut()?))
             })

@@ -19,6 +19,7 @@ mod imp_vec {
     }
 
     impl Recording {
+        #[cfg_attr(not(feature = "recording_avec_len"), allow(dead_code))]
         fn new(init_len: usize) -> Recording {
             let rs = advice::recording::avec_len::Tag.add_chunk();
             Recording {
@@ -117,7 +118,6 @@ mod imp_box {
     use std::slice;
     use std::ops::{Deref, DerefMut};
     use crate::advice::{self, PlaybackStreamTag};
-    use crate::advice::ChunkedRecordingStreamTag;
 
     pub struct AVec<T> {
         v: Box<[MaybeUninit<T>]>,
@@ -133,7 +133,7 @@ mod imp_box {
             }
         }
 
-        pub fn with_capacity(n: usize) -> AVec<T> {
+        pub fn with_capacity(_n: usize) -> AVec<T> {
             Self::new()
         }
 

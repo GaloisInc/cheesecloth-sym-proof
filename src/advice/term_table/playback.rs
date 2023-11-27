@@ -1,11 +1,9 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::convert::TryInto;
+#[cfg(not(feature = "playback_term_intern_index"))] use std::collections::HashMap;
 use std::io::Read;
 use std::mem;
 use serde_cbor;
-use crate::BinOp;
-use crate::logic::{Term, TermKind, VarId};
+use crate::logic::TermKind;
 use super::RawTermKind;
 
 thread_local! {
@@ -60,11 +58,13 @@ pub fn kind_to_index(kind: TermKind) -> usize {
 pub unsafe fn term_kind_from_raw(raw: RawTermKind) -> TermKind {
     #[cfg(feature = "playback_term_table")]
     unsafe {
+        use crate::logic::Term;
         return raw.to_term_kind(|ptr_usize| {
             Term::from_raw(&*(ptr_usize as *const RawTermKind))
         });
     }
     #[cfg(not(feature = "playback_term_table"))] {
+        let _ = raw;
         unreachable!("impossible: term_table::playback method was called, \
             but playback_term_table feature is disabled?");
     }
