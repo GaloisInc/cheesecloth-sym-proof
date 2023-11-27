@@ -22,7 +22,8 @@ use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred}
 use sym_proof::logic::shift::ShiftExt;
 use sym_proof::micro_ram::Program;
 use sym_proof::micro_ram::import;
-use sym_proof::micro_ram::{Opcode, MemWidth, mem_load};
+use sym_proof::micro_ram::{Opcode, MemWidth};
+use sym_proof::micro_ram::state::mem_load;
 use sym_proof::symbolic::{self, MemState, Memory, MemMap};
 use sym_proof::tactics::{Tactics, ReachTactics};
 use witness_checker::micro_ram::types::Advice;

@@ -140,13 +140,13 @@ impl Memory for MemConcrete {
             .map_err(|e| format!("when evaluating addr: {e}"))?;
         let val = val.as_const_or_err()
             .map_err(|e| format!("in MemConcrete::store: {e}"))?;
-        micro_ram::mem_store(&mut self.m, w, addr, val);
+        micro_ram::state::mem_store(&mut self.m, w, addr, val);
         Ok(())
     }
     fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
         let addr = addr.as_const_or_err()
             .map_err(|e| format!("when evaluating addr: {e}"))?;
-        let val = micro_ram::mem_load(&self.m, w, addr);
+        let val = micro_ram::state::mem_load(&self.m, w, addr);
         Ok(Term::const_(val))
     }
 
@@ -383,7 +383,7 @@ impl Memory for MemSnapshot {
 impl MemSnapshot {
     pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Word, String> {
         Ok(SNAPSHOT_DATA.with(|c| {
-            micro_ram::mem_load(&c.borrow(), w, self.base + addr)
+            micro_ram::state::mem_load(&c.borrow(), w, self.base + addr)
         }))
     }
 
