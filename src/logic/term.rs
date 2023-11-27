@@ -1,6 +1,5 @@
 use crate::{Word, BinOp};
 use crate::logic::VarId;
-use crate::logic::print::Printer;
 
 
 mod imp_interner {
@@ -224,10 +223,20 @@ impl Term {
         }
     }
 
+    #[cfg(feature = "verbose")]
     pub fn as_const_or_err(&self) -> Result<Word, String> {
+        use crate::logic::print::Printer;
         match self.kind() {
             TermKind::Const(x) => Ok(x),
             ref t => Err(format!("expected const, but got {}", Printer::new(0).display(t))),
+        }
+    }
+
+    #[cfg(not(feature = "verbose"))]
+    pub fn as_const_or_err(&self) -> Result<Word, &'static str> {
+        match self.kind() {
+            TermKind::Const(x) => Ok(x),
+            _ => Err("expected const"),
         }
     }
 

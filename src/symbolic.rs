@@ -7,13 +7,55 @@ use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand, Instr};
 use crate::logic::{Term, VarId, Prop};
 use crate::logic::eq_shifted::EqShifted;
 use crate::logic::fold::{Fold, Folder};
+#[cfg(feature = "verbose")]
 use crate::logic::print::debug_print;
 use crate::logic::visit::{Visit, Visitor};
 
 
+#[cfg(feature = "verbose")]
+pub type Error = String;
+#[cfg(not(feature = "verbose"))]
+pub type Error = &'static str;
+
+
+#[cfg(feature = "verbose")]
+macro_rules! format_verbose {
+    ($base:expr, $detail:expr) => {
+        format!(concat!($base, ": ", $detail))
+    };
+    ($base:expr, $detail:expr, $($args:tt)*) => {
+        format!(concat!($base, ": ", $detail), $($args)*)
+    };
+}
+#[cfg(not(feature = "verbose"))]
+macro_rules! format_verbose {
+    ($base:expr, $detail:expr) => {
+        $base
+    };
+    ($base:expr, $detail:expr, $($args:tt)*) => {
+        $base
+    };
+}
+
+#[cfg(feature = "verbose")]
+macro_rules! map_err_verbose {
+    ($r:expr, $f:expr) => {
+        $r.map_err($f)
+    };
+}
+#[cfg(not(feature = "verbose"))]
+macro_rules! map_err_verbose {
+    ($r:expr, $f:expr) => {
+        $r
+    };
+}
+
+
+
+
 pub trait Memory {
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term, props: &[Prop]) -> Result<(), String>;
-    fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, String>;
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, props: &[Prop]) -> Result<(), Error>;
+    fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, Error>;
 
     /// Copy the words at `addrs` from `src` to `dest`.
     fn copy_from<S: Memory>(
@@ -21,7 +63,7 @@ pub trait Memory {
         src: &S,
         addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
-    ) -> Result<(), String>;
+    ) -> Result<(), Error>;
 }
 
 
@@ -35,7 +77,7 @@ pub enum MemState {
 }
 
 impl Memory for MemState {
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term, props: &[Prop]) -> Result<(), String> {
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, props: &[Prop]) -> Result<(), Error> {
         match *self {
             MemState::Concrete(ref mut m) => m.store(w, addr, val, props),
             MemState::Map(ref mut m) => m.store(w, addr, val, props),
@@ -44,7 +86,7 @@ impl Memory for MemState {
             MemState::Multi(ref mut m) => m.store(w, addr, val, props),
         }
     }
-    fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, String> {
+    fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, Error> {
         match *self {
             MemState::Concrete(ref m) => m.load(w, addr, props),
             MemState::Map(ref m) => m.load(w, addr, props),
@@ -59,7 +101,7 @@ impl Memory for MemState {
         src: &S,
         addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         match *self {
             MemState::Concrete(ref mut m) => m.copy_from(src, addrs, props),
             MemState::Map(ref mut m) => m.copy_from(src, addrs, props),
@@ -118,9 +160,9 @@ fn copy_from_generic<D: Memory, S: Memory>(
     src: &S,
     addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
     props: &[Prop],
-) -> Result<(), String> {
+) -> Result<(), Error> {
     for (addr, w) in addrs {
-        assert!(addr % w.bytes() == 0, "misaligned access at address 0x{:x}, width {:?}", addr, w);
+        require!(addr % w.bytes() == 0, "misaligned access at address 0x{:x}, width {:?}", addr, w);
         let addr = Term::const_(addr);
         let val = src.load(w, addr, props)?;
         dest.store(w, addr, val, props)?;
@@ -135,17 +177,17 @@ pub struct MemConcrete {
 }
 
 impl Memory for MemConcrete {
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), String> {
-        let addr = addr.as_const_or_err()
-            .map_err(|e| format!("when evaluating addr: {e}"))?;
-        let val = val.as_const_or_err()
-            .map_err(|e| format!("in MemConcrete::store: {e}"))?;
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), Error> {
+        let addr = map_err_verbose!(addr.as_const_or_err(),
+            |e| format!("when evaluating addr: {e}"))?;
+        let val = map_err_verbose!(val.as_const_or_err(),
+            |e| format!("in MemConcrete::store: {e}"))?;
         micro_ram::state::mem_store(&mut self.m, w, addr, val);
         Ok(())
     }
-    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
-        let addr = addr.as_const_or_err()
-            .map_err(|e| format!("when evaluating addr: {e}"))?;
+    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, Error> {
+        let addr = map_err_verbose!(addr.as_const_or_err(),
+            |e| format!("when evaluating addr: {e}"))?;
         let val = micro_ram::state::mem_load(&self.m, w, addr);
         Ok(Term::const_(val))
     }
@@ -155,7 +197,7 @@ impl Memory for MemConcrete {
         src: &S,
         addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         copy_from_generic(self, src, addrs, props)
     }
 }
@@ -198,15 +240,15 @@ pub struct MemMap {
 }
 
 impl Memory for MemMap {
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), String> {
-        let addr = addr.as_const_or_err()
-            .map_err(|e| format!("when evaluating addr: {e}"))?;
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), Error> {
+        let addr = map_err_verbose!(addr.as_const_or_err(),
+            |e| format!("when evaluating addr: {e}"))?;
         self.store_concrete(w, addr, val)
     }
 
-    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
-        let addr = addr.as_const_or_err()
-            .map_err(|e| format!("when evaluating addr: {e}"))?;
+    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, Error> {
+        let addr = map_err_verbose!(addr.as_const_or_err(),
+            |e| format!("when evaluating addr: {e}"))?;
         self.load_concrete(w, addr)
     }
 
@@ -215,24 +257,26 @@ impl Memory for MemMap {
         src: &S,
         addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         copy_from_generic(self, src, addrs, props)
     }
 }
 
 impl MemMap {
     pub fn new() -> MemMap {
-        MemMap { m: AMap::new() }
+        MemMap {
+            m: AMap::new(),
+        }
     }
 
-    pub fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
+    pub fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), Error> {
         for offset in 0 .. w.bytes() {
             self.m.insert(addr + offset, (val.clone(), offset as u8));
         }
         Ok(())
     }
 
-    pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
+    pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, Error> {
         match self.load_concrete_splice(w, addr) {
             Ok(result_word) => return Ok(Term::const_(result_word)),
             Err(_) => {},
@@ -246,15 +290,16 @@ impl MemMap {
             Some(&(t, offset)) => {
                 if offset != 0 {
                     // Require t to be concrete
-                    return Err(format!("NYI: load requires splicing bytes when not concrete: \
-                        at 0x{:x}, got offset {}, but expected 0. Symbolic term: {:?}",
+                    return Err(format_verbose!(
+                        "NYI: load requires splicing bytes when not concrete",
+                        "at 0x{:x}, got offset {}, but expected 0. Symbolic term: {:?}",
                         addr, offset, t))
                 }
                 t
             },
             None => {
-                return Err(format!("failed to load from address 0x{:x}: uninitialized data",
-                    addr));
+                return Err(format_verbose!(
+                    "failed to load uninitialized data", "from address 0x{:x}", addr));
             },
         };
 
@@ -262,19 +307,22 @@ impl MemMap {
             match self.m.get(&(addr + offset)) {
                 Some(&(t, loaded_offset)) => {
                     if loaded_offset != offset as u8 {
-                        return Err(format!("NYI: load requires splicing bytes: \
-                            at 0x{:x}, got offset {}, but expected {}",
+                        return Err(format_verbose!(
+                            "NYI: load requires splicing bytes",
+                            "at 0x{:x}, got offset {}, but expected {}",
                             addr + offset, loaded_offset, offset));
                     }
                     if t != val {
-                        return Err(format!("NYI: load requires splicing bytes: \
-                            at 0x{:x}, got term {}, but expected {}",
+                        return Err(format_verbose!(
+                            "NYI: load requires splicing bytes",
+                            "at 0x{:x}, got term {}, but expected {}",
                             addr + offset, debug_print(&t), debug_print(&val)));
                     }
                 },
                 None => {
-                    return Err(format!("failed to load from address 0x{:x}: uninitialized data",
-                        addr + offset));
+                    return Err(format_verbose!(
+                        "failed to load uninitialized data",
+                        "from address 0x{:x}", addr + offset));
                 },
             }
         }
@@ -288,7 +336,7 @@ impl MemMap {
     }
 
     /// Try to load concrete values from the memory.
-    fn load_concrete_splice(&self, w: MemWidth, addr: Word) -> Result<Word, String> {
+    fn load_concrete_splice(&self, w: MemWidth, addr: Word) -> Result<Word, Error> {
         // Initialize the result word
         let mut result_word: u64 = 0;
 
@@ -302,14 +350,15 @@ impl MemMap {
                             result_word = result_word | (byte << offset * 8) as u64
                         },
                         None =>
-                            return Err(format!("Loaded values are not concrete: \
-                                at 0x{:x}, got offset {}, but expected 0. Symbolic term: {:?}",
+                            return Err(format_verbose!("Loaded values are not concrete",
+                                "at 0x{:x}, got offset {}, but expected 0. Symbolic term: {:?}",
                                 addr, offset, t)),
                     }
                 },
                 None => {
-                    return Err(format!("failed to load from address 0x{:x}: uninitialized data",
-                        addr + offset));
+                    return Err(format_verbose!(
+                        "failed to load uninitialized data",
+                        "from address 0x{:x}", addr + offset));
                 },
             }
         }
@@ -360,12 +409,12 @@ impl Memory for MemSnapshot {
         _addr: Term,
         _val: Term,
         _props: &[Prop],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         panic!("can't store to MemSnapshot");
     }
-    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
-        let addr = addr.as_const_or_err()
-            .map_err(|e| format!("when evaluating addr: {e}"))?;
+    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, Error> {
+        let addr = map_err_verbose!(addr.as_const_or_err(),
+            |e| format!("when evaluating addr: {e}"))?;
         let val = self.load_concrete(w, addr)?;
         Ok(Term::const_(val))
     }
@@ -375,13 +424,13 @@ impl Memory for MemSnapshot {
         _src: &S,
         _addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         _props: &[Prop],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         panic!("can't store to MemSnapshot");
     }
 }
 
 impl MemSnapshot {
-    pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Word, String> {
+    pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Word, Error> {
         Ok(SNAPSHOT_DATA.with(|c| {
             micro_ram::state::mem_load(&c.borrow(), w, self.base + addr)
         }))
@@ -432,11 +481,11 @@ impl MemLog {
 }
 
 impl Memory for MemLog {
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), String> {
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), Error> {
         self.l.push((addr, val, w));
         Ok(())
     }
-    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
+    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, Error> {
         let _ = (w, addr);
         Err("MemLog load NYI".into())
     }
@@ -446,7 +495,7 @@ impl Memory for MemLog {
         src: &S,
         addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         copy_from_generic(self, src, addrs, props)
     }
 }
@@ -561,19 +610,19 @@ impl MemMulti {
 }
 
 impl Memory for MemMulti {
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term, props: &[Prop]) -> Result<(), String> {
+    fn store(&mut self, w: MemWidth, addr: Term, val: Term, props: &[Prop]) -> Result<(), Error> {
         let (offset, kind, i) = match self.find_region(addr.clone(), props) {
             Some(x) => x,
-            None => return Err(format!(
-                "couldn't find a region containing address {}", debug_print(&addr))),
+            None => return Err(format_verbose!(
+                "couldn't find a region containing address", "{}", debug_print(&addr))),
         };
         self.region_mut(kind, i).store(w, offset, val, props)
     }
-    fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, String> {
+    fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, Error> {
         let (offset, kind, i) = match self.find_region(addr.clone(), props) {
             Some(x) => x,
-            None => return Err(format!(
-                "couldn't find a region containing address {}", debug_print(&addr))),
+            None => return Err(format_verbose!(
+                "couldn't find a region containing address", "{}", debug_print(&addr))),
         };
         self.region(kind, i).load(w, offset, props)
     }
@@ -583,7 +632,7 @@ impl Memory for MemMulti {
         src: &S,
         addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         copy_from_generic(self, src, addrs, props)
     }
 }
@@ -643,7 +692,7 @@ pub struct State {
     pub pc: Word,
     pub regs: [Term; NUM_REGS],
     pub mem: MemState,
-    
+
     // For debugging, mantain a concrete state to check the cymbolic
     // execution
     #[cfg(feature = "debug_symbolic")]
@@ -726,7 +775,7 @@ impl State {
     // state conc_st, which should be executed in parallel to the
     // symbolic state.
     #[cfg(feature = "debug_symbolic")]
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), Error> {
         #[cfg(feature = "debug_symbolic")]
         match self.conc_st {
             Some(ref cst) => self.validate_conc_state(cst),
@@ -737,7 +786,7 @@ impl State {
     // Validate the symbolic state, as a predicate, over some provided
     // concrete state
     #[cfg(feature = "debug_symbolic")]
-    pub fn validate_conc_state(&self, conc_st: &micro_ram::State) -> Result<(), String> {
+    pub fn validate_conc_state(&self, conc_st: &micro_ram::State) -> Result<(), Error> {
         self.validate_pc(&conc_st.pc)?;
         self.validate_regs(&conc_st.regs)?;
         self.validate_mem(&conc_st.mem)?;
@@ -748,9 +797,10 @@ impl State {
     }
 
     #[cfg(feature = "debug_symbolic")]
-    fn validate_pc(&self, conc_pc: &Addr) -> Result<(), String> {
+    fn validate_pc(&self, conc_pc: &Addr) -> Result<(), Error> {
         if self.pc != *conc_pc{
-            return Err(format!("Pc's don't match. Symbolic {} != Concrete {}", self.pc, conc_pc));
+            return Err(format_verbose!(
+                "Pc's don't match.", "Symbolic {} != Concrete {}", self.pc, conc_pc));
         }
         return Ok(())
     }
@@ -758,13 +808,15 @@ impl State {
     // For now, it only checks one thing:
     // 1. Concrete Terms match
     #[cfg(feature = "debug_symbolic")]
-    fn validate_regs(&self, conc_regs: &[Word; NUM_REGS]) -> Result<(), String> {
+    fn validate_regs(&self, conc_regs: &[Word; NUM_REGS]) -> Result<(), Error> {
         for (i, reg) in self.regs.iter().enumerate() {
             let conc_reg = conc_regs[i];
             match reg.as_const() {
                 Some(w) => {
                     if w != conc_reg {
-                        return Err(format!("regs's don't match. Symb r[{}]={} != Conc r[{}]={}", i, w, i, conc_reg));
+                        return Err(format_verbose!(
+                            "regs's don't match.", "Symb r[{}]={} != Conc r[{}]={}",
+                            i, w, i, conc_reg));
                     }
                 },
                 // Checks for symbolic terms not implemented yet
@@ -776,7 +828,7 @@ impl State {
 
     
     #[cfg(feature = "debug_symbolic")]
-    fn validate_mem(&self, _conc_mem: &HashMap<u64, u64>) -> Result<(), String> {
+    fn validate_mem(&self, _conc_mem: &HashMap<u64, u64>) -> Result<(), Error> {
         // Not yet implemented
         return Ok(())
     }
@@ -805,16 +857,19 @@ impl State {
     }
 
     /*
-    pub fn check_eq_concrete(&self, vars: &[Word], conc: &micro_ram::State) -> Result<(), String> {
+    pub fn check_eq_concrete(&self, vars: &[Word], conc: &micro_ram::State) -> Result<(), Error> {
         if self.pc != conc.pc {
-            return Err(format!("pc {} does not match concrete pc {}",
-                self.pc, conc.pc));
+            return Err(format_verbose!(
+                "symbolic and concrete pcs don't match",
+                "symbolic = {}; concrete = {}", self.pc, conc.pc));
         }
 
         for (i, (sym_reg, &conc_reg)) in self.regs.iter().zip(conc.regs.iter()).enumerate() {
             let sym_reg_val = sym_reg.eval(vars);
             if sym_reg_val != conc_reg {
-                return Err(format!("symbolic r{} {} = {} does not match concrete r{} {}",
+                return Err(format_verbose!(
+                    "symbolic and concrete registers don't match",
+                    "symbolic r{} {} = {}; concrete r{} = {}",
                     i, sym_reg, sym_reg_val, i, conc_reg));
             }
         }
