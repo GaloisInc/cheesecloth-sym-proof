@@ -5,11 +5,11 @@ use crate::logic::print::Printer;
 
 mod imp_interner {
     #![cfg_attr(feature = "playback_term_table", allow(dead_code))]
-    use std::cell::RefCell;
+    use core::cell::RefCell;
     use std::collections::HashSet;
-    use std::hash::{Hash, Hasher};
-    use std::marker::PhantomData;
-    use std::mem::{self, ManuallyDrop};
+    use core::hash::{Hash, Hasher};
+    use core::marker::PhantomData;
+    use core::mem::{self, ManuallyDrop};
     use bumpalo::Bump;
     use crate::logic::term::TermKind;
 
@@ -114,8 +114,8 @@ mod imp_interner {
 
 mod imp_prealloc {
     #![cfg_attr(not(feature = "playback_term_table"), allow(dead_code))]
-    use std::hash::{Hash, Hasher};
-    use std::marker::PhantomData;
+    use core::hash::{Hash, Hasher};
+    use core::marker::PhantomData;
     #[allow(unused)] use crate::advice::{PlaybackStreamTag, RecordingStreamTag};
     use crate::advice::term_table::RawTermKind;
     use crate::advice::term_table::playback;

@@ -2,7 +2,10 @@
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
 #![cfg_attr(feature = "deny_warnings", deny(warnings))]
-use std::mem;
+
+extern crate alloc;
+
+use core::mem;
 
 #[macro_use] mod macros;
 

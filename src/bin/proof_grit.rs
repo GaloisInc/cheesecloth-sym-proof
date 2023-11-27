@@ -10,7 +10,7 @@
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
 #![cfg_attr(feature = "deny_warnings", deny(warnings))]
-use std::array;
+use core::array;
 use std::env;
 use env_logger;
 use log::trace;

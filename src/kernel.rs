@@ -1,8 +1,8 @@
-use std::borrow::Cow;
-use std::convert::TryFrom;
-use std::iter;
-use std::mem;
-use std::ops::{Deref, DerefMut};
+use core::convert::TryFrom;
+use core::iter;
+use core::mem;
+use core::ops::{Deref, DerefMut};
+use alloc::borrow::Cow;
 use crate::{Word, Addr};
 use crate::advice;
 use crate::advice::vec::AVec;
@@ -261,7 +261,7 @@ impl<'a> Proof<'a> {
         }
 
         #[cfg(not(feature = "playback_search_index"))] {
-            use std::array;
+            use core::array;
             let premises: [Cow<Prop>; N] = array::from_fn(|i| premises[i]());
             let premises: [&Prop; N] = array::from_fn(|i| &*premises[i]);
 
@@ -305,7 +305,7 @@ impl<'a> Proof<'a> {
             }
 
             #[cfg(feature = "verbose")] {
-                use std::fmt::Write;
+                use core::fmt::Write;
                 let mut desc = String::new();
                 for (i, p) in premises.iter().enumerate() {
                     if i > 0 {

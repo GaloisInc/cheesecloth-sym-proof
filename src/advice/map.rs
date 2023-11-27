@@ -3,10 +3,10 @@ use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 
 mod imp_btree {
     #![cfg_attr(feature = "playback_amap_keys", allow(dead_code))]
-    use std::borrow::Borrow;
+    use core::borrow::Borrow;
     use std::collections::{BTreeMap, BTreeSet};
-    use std::fmt;
-    use std::iter::FromIterator;
+    use core::fmt;
+    use core::iter::FromIterator;
     use crate::advice::{self, Record, RecordingStreamTag, ChunkedRecordingStreamTag};
 
     pub struct AMap<K: Record, V> {
@@ -128,9 +128,9 @@ mod imp_btree {
 
 mod imp_box {
     #![cfg_attr(not(feature = "playback_amap_keys"), allow(dead_code))]
-    use std::borrow::Borrow;
-    use std::fmt;
-    use std::iter::FromIterator;
+    use core::borrow::Borrow;
+    use core::fmt;
+    use core::iter::FromIterator;
     use crate::advice::{self, Playback, PlaybackStreamTag};
 
     pub struct AMap<K, V> {

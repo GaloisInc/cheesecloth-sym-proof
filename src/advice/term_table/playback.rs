@@ -1,7 +1,7 @@
-use std::cell::RefCell;
+use core::cell::RefCell;
 #[cfg(not(feature = "playback_term_intern_index"))] use std::collections::HashMap;
 use std::io::Read;
-use std::mem;
+use core::mem;
 use serde_cbor;
 use crate::logic::TermKind;
 use super::RawTermKind;

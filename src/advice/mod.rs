@@ -1,7 +1,7 @@
-use std::array;
-use std::convert::{TryFrom, TryInto};
+use core::array;
+use core::convert::{TryFrom, TryInto};
 use std::io::{Read, Write};
-use std::mem;
+use core::mem;
 use std::panic::{self, UnwindSafe};
 use serde_cbor;
 use crate::{Word, BinOp};
@@ -69,7 +69,7 @@ pub trait RecordingStreamTag: Sized + Copy {
 macro_rules! recording_stream {
     ($name:ident) => {
         pub mod $name {
-            use std::cell::RefCell;
+            use core::cell::RefCell;
             use crate::advice::{RecordingStream, RecordingStreamTag};
 
             thread_local! {
@@ -174,7 +174,7 @@ pub trait ChunkedRecordingStreamTag: Sized + Copy {
 macro_rules! chunked_recording_stream {
     ($name:ident) => {
         pub mod $name {
-            use std::cell::RefCell;
+            use core::cell::RefCell;
             use crate::advice::{
                 RecordingStream, RecordingStreamTag,
                 ChunkedRecordingStream, ChunkedRecordingStreamTag, ChunkId,
@@ -303,7 +303,7 @@ pub trait PlaybackStreamTag: Sized + Copy {
 macro_rules! playback_stream_inner {
     ($name:ident) => {
         pub mod $name {
-            use std::cell::RefCell;
+            use core::cell::RefCell;
             use crate::advice::{PlaybackStream, PlaybackStreamTag};
 
             thread_local! {
@@ -339,11 +339,11 @@ macro_rules! playback_stream {
 }
 
 
-pub trait Record: std::fmt::Debug {
+pub trait Record: core::fmt::Debug {
     fn record_into(&self, rs: impl RecordingStreamTag);
 }
 
-pub trait Playback: std::fmt::Debug {
+pub trait Playback: core::fmt::Debug {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self;
 }
 

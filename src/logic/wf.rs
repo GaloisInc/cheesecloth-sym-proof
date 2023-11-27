@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::fmt::Display;
+use core::fmt::Display;
 use crate::logic::{VarId, Binder};
 use crate::logic::print::{Print, Printer, DisplayWithPrinter};
 use crate::logic::visit::{self, Visit, Visitor};

@@ -1,6 +1,6 @@
-use std::convert::TryFrom;
+use core::convert::TryFrom;
 use std::collections::HashMap;
-use std::ops::Index;
+use core::ops::Index;
 use crate::{Word, WORD_BYTES, Addr, BinOp};
 
 

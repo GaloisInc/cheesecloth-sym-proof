@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use core::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Write;
 use serde_cbor;

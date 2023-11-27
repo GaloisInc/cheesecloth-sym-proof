@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::iter;
+use core::iter;
 use std::path::Path;
 use witness_checker::mode::if_mode::{self, Mode};
 use witness_checker::micro_ram::types::{self, VersionedMultiExec, ExecBody, RamInstr, RamState};

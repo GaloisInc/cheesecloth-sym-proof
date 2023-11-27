@@ -1,10 +1,10 @@
-use std::fmt;
-use std::slice;
+use core::fmt;
+use core::slice;
 use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 
 mod imp_vec {
-    use std::iter::FromIterator;
-    use std::ops::{Deref, DerefMut};
+    use core::iter::FromIterator;
+    use core::ops::{Deref, DerefMut};
     use crate::advice::{self, ChunkedRecordingStreamTag, RecordingStreamTag};
 
     pub struct AVec<T> {
@@ -112,11 +112,11 @@ mod imp_vec {
 }
 
 mod imp_box {
-    use std::iter::{self, FromIterator};
-    use std::mem::{self, MaybeUninit};
-    use std::ptr;
-    use std::slice;
-    use std::ops::{Deref, DerefMut};
+    use core::iter::{self, FromIterator};
+    use core::mem::{self, MaybeUninit};
+    use core::ptr;
+    use core::slice;
+    use core::ops::{Deref, DerefMut};
     use crate::advice::{self, PlaybackStreamTag};
 
     pub struct AVec<T> {

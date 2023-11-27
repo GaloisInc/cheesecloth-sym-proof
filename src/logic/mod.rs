@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use core::ops::Deref;
 use crate::logic::fold::Fold;
 use crate::logic::shift::ShiftExt;
 use crate::logic::subst::SubstExt;

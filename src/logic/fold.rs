@@ -1,4 +1,4 @@
-use std::array;
+use core::array;
 use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder};
 
 

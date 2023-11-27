@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::hash::Hash;
+use core::hash::Hash;
 use crate::advice::Record;
 use crate::advice::map::AMap;
 use crate::logic::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder};

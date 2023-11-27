@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::fmt;
+use core::fmt;
 use std::rc::Rc;
 use crate::{BinOp, Addr};
 use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder, VarCounter};
