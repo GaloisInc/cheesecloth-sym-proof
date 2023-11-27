@@ -9,6 +9,7 @@
 // The proof implementation returns `Err` when a rule fails to apply.  A bad proof will be caught
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
+#![cfg_attr(feature = "deny_warnings", deny(warnings))]
 use std::array;
 use std::collections::{HashMap, HashSet};
 use std::env;
