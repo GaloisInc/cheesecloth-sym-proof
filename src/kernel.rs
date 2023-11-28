@@ -2,11 +2,15 @@ use core::convert::TryFrom;
 use core::iter;
 use core::mem;
 use core::ops::{Deref, DerefMut};
+use alloc::{format, vec};
 use alloc::borrow::Cow;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
+#[cfg(feature = "verbose")] use std::{println, eprintln};
 use crate::{Word, Addr};
 use crate::advice;
 use crate::advice::vec::AVec;
-#[allow(unused)] use crate::advice::{PlaybackStreamTag, RecordingStreamTag};
 use crate::logic::{Prop, Term, Binder, VarCounter, ReachableProp, StatePred};
 use crate::logic::eq_shifted::EqShifted;
 use crate::logic::print::{Print, Printer, DisplayWithPrinter};
@@ -22,6 +26,7 @@ use crate::interp::{Rule, ReachRule};
 #[cfg(any(feature = "recording_rules", feature = "recording_term_index"))]
 macro_rules! record {
     ($($x:expr),*) => {{
+        use crate::advice::RecordingStreamTag;
         $( advice::recording::rules::Tag.record(&$x); )*
     }};
 }
@@ -239,6 +244,7 @@ impl<'a> Proof<'a> {
         premises: [&dyn Fn() -> Cow<'b, Prop>; N],
     ) {
         #[cfg(feature = "playback_search_index")] {
+            use crate::advice::PlaybackStreamTag;
             let ps = advice::playback::search_index::Tag;
 
             let (k, premise_fn) = ps.take_index_and_elem(&premises);
@@ -277,6 +283,7 @@ impl<'a> Proof<'a> {
             for (j, prop) in self.cur.props.iter().enumerate() {
                 if let Some(k) = check(prop, 0) {
                     #[cfg(feature = "recording_search_index")] {
+                        use crate::advice::RecordingStreamTag;
                         let rs = advice::recording::search_index::Tag;
                         rs.record(&k);
                         rs.record(&true);
@@ -292,6 +299,7 @@ impl<'a> Proof<'a> {
                 for (j, prop) in s.props.iter().enumerate() {
                     if let Some(k) = check(prop, shift_amount) {
                         #[cfg(feature = "recording_search_index")] {
+                            use crate::advice::RecordingStreamTag;
                             let rs = advice::recording::search_index::Tag;
                             rs.record(&k);
                             rs.record(&false);
@@ -668,7 +676,9 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     #[cfg(feature = "debug_symbolic")]
     pub fn print_conc_st(&self) {
-        eprintln!("CONCRETE REGS: {:?}",self.state.conc_st.clone().map(|st| st.regs));
+        #[cfg(feature = "verbose")] {
+            eprintln!("CONCRETE REGS: {:?}",self.state.conc_st.clone().map(|st| st.regs));
+        }
     }
 
     fn get_instr_at(&self, pc:Addr) -> Instr {

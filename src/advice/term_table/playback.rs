@@ -1,6 +1,8 @@
 use core::cell::RefCell;
+use alloc::boxed::Box;
 #[cfg(not(feature = "playback_term_intern_index"))] use std::collections::HashMap;
 use std::io::Read;
+use std::thread_local;
 use core::mem;
 use serde_cbor;
 use crate::logic::TermKind;

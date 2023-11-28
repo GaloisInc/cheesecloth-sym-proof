@@ -2,8 +2,10 @@
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
 #![cfg_attr(feature = "deny_warnings", deny(warnings))]
+#![no_std]
 
 extern crate alloc;
+extern crate std;
 
 use core::mem;
 

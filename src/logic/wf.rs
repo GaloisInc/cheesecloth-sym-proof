@@ -1,5 +1,7 @@
-use std::collections::HashSet;
 use core::fmt::Display;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use std::collections::HashSet;
 use crate::logic::{VarId, Binder};
 use crate::logic::print::{Print, Printer, DisplayWithPrinter};
 use crate::logic::visit::{self, Visit, Visitor};

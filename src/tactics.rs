@@ -1,3 +1,7 @@
+use alloc::vec;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use std::{println, eprintln};
 use crate::Addr;
 use crate::kernel::{Proof, ReachProof, PropId};
 use crate::logic::{Term, Prop, VarCounter, Binder};

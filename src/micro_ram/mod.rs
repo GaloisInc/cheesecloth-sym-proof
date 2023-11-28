@@ -79,8 +79,6 @@ pub struct ProgramChunk {
 
 impl<'a> Program<'a> {
     pub fn new(instrs: &'a [Instr], chunks: &'a [ProgramChunk]) -> Program<'a> {
-        dbg!(instrs.len());
-        eprintln!("chunks = {chunks:?}");
         #[cfg(debug_assertions)] {
             // Chunks must be sorted and nonoverlapping.
             for (c1, c2) in chunks.iter().zip(chunks.iter().skip(1)) {

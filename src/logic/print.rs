@@ -1,5 +1,7 @@
-use std::collections::HashSet;
 use core::fmt;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use std::collections::HashSet;
 use std::rc::Rc;
 use crate::{BinOp, Addr};
 use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder, VarCounter};

@@ -131,6 +131,8 @@ mod imp_box {
     use core::borrow::Borrow;
     use core::fmt;
     use core::iter::FromIterator;
+    use alloc::boxed::Box;
+    use alloc::vec::Vec;
     use crate::advice::{self, Playback, PlaybackStreamTag};
 
     pub struct AMap<K, V> {

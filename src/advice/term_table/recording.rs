@@ -1,6 +1,8 @@
 use core::cell::RefCell;
+use alloc::vec::Vec;
 use std::collections::HashMap;
 use std::io::Write;
+use std::thread_local;
 use serde_cbor;
 use crate::logic::Term;
 use super::RawTermKind;

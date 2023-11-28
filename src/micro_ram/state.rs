@@ -101,7 +101,9 @@ impl State {
             },
             Opcode::Advise => {
                 let val = advice.unwrap_or_else(|| {
-                    eprintln!("warning: missing advice");
+                    #[cfg(feature = "verbose")] {
+                        std::eprintln!("warning: missing advice");
+                    }
                     0
                 });
                 self.set_reg(instr.rd, val);

@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder};
 
 

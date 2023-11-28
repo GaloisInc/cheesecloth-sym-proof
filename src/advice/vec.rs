@@ -5,6 +5,8 @@ use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 mod imp_vec {
     use core::iter::FromIterator;
     use core::ops::{Deref, DerefMut};
+    use alloc::boxed::Box;
+    use alloc::vec::Vec;
     use crate::advice::{self, ChunkedRecordingStreamTag, RecordingStreamTag};
 
     pub struct AVec<T> {
@@ -117,6 +119,8 @@ mod imp_box {
     use core::ptr;
     use core::slice;
     use core::ops::{Deref, DerefMut};
+    use alloc::boxed::Box;
+    use alloc::vec::Vec;
     use crate::advice::{self, PlaybackStreamTag};
 
     pub struct AVec<T> {

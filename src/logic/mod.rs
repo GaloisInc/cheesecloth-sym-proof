@@ -1,4 +1,7 @@
 use core::ops::Deref;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 use crate::logic::fold::Fold;
 use crate::logic::shift::ShiftExt;
 use crate::logic::subst::SubstExt;

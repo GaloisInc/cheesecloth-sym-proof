@@ -1,7 +1,9 @@
 use core::array;
 use core::convert::{TryFrom, TryInto};
-use std::io::{Read, Write};
 use core::mem;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use std::io::{Read, Write};
 use std::panic::{self, UnwindSafe};
 use serde_cbor;
 use crate::{Word, BinOp};
@@ -70,6 +72,7 @@ macro_rules! recording_stream {
     ($name:ident) => {
         pub mod $name {
             use core::cell::RefCell;
+            use std::thread_local;
             use crate::advice::{RecordingStream, RecordingStreamTag};
 
             thread_local! {
@@ -175,6 +178,7 @@ macro_rules! chunked_recording_stream {
     ($name:ident) => {
         pub mod $name {
             use core::cell::RefCell;
+            use std::thread_local;
             use crate::advice::{
                 RecordingStream, RecordingStreamTag,
                 ChunkedRecordingStream, ChunkedRecordingStreamTag, ChunkId,
@@ -304,6 +308,7 @@ macro_rules! playback_stream_inner {
     ($name:ident) => {
         pub mod $name {
             use core::cell::RefCell;
+            use std::thread_local;
             use crate::advice::{PlaybackStream, PlaybackStreamTag};
 
             thread_local! {
@@ -936,6 +941,8 @@ mod load_finish {
     // Helper functions in this module are used only when certain features are enabled.
     #![allow(dead_code)]
     #![allow(unused_imports)]
+    use alloc::string::{String, ToString};
+    use std::eprintln;
     use std::fs::{self, File};
     use std::path::Path;
     use super::{

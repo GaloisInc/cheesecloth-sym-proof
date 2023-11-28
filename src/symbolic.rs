@@ -1,4 +1,5 @@
-use std::cell::RefCell;
+use core::cell::RefCell;
+#[cfg(feature = "verbose")] use alloc::format;
 use std::collections::HashMap;
 use crate::{Word, WORD_BYTES, Addr};
 use crate::advice::map::AMap;
@@ -13,7 +14,7 @@ use crate::logic::visit::{Visit, Visitor};
 
 
 #[cfg(feature = "verbose")]
-pub type Error = String;
+pub type Error = alloc::string::String;
 #[cfg(not(feature = "verbose"))]
 pub type Error = &'static str;
 
@@ -398,7 +399,8 @@ pub struct MemSnapshot {
     pub base: Addr,
 }
 
-thread_local! {
+#[cfg(not(feature = "microram"))]
+std::thread_local! {
     static SNAPSHOT_DATA: RefCell<HashMap<Addr, Word>> = RefCell::new(HashMap::new());
 }
 
@@ -431,11 +433,17 @@ impl Memory for MemSnapshot {
 
 impl MemSnapshot {
     pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Word, Error> {
-        Ok(SNAPSHOT_DATA.with(|c| {
-            micro_ram::state::mem_load(&c.borrow(), w, self.base + addr)
-        }))
+        #[cfg(not(feature = "microram"))] {
+            return Ok(SNAPSHOT_DATA.with(|c| {
+                micro_ram::state::mem_load(&c.borrow(), w, self.base + addr)
+            }));
+        }
+        #[cfg(feature = "microram")] {
+            todo!("MemSnapshot NYI on microram")
+        }
     }
 
+    #[cfg(not(feature = "microram"))]
     pub fn init_data(m: HashMap<Addr, Word>) {
         SNAPSHOT_DATA.with(|c| {
             *c.borrow_mut() = m;
@@ -791,7 +799,7 @@ impl State {
         self.validate_regs(&conc_st.regs)?;
         self.validate_mem(&conc_st.mem)?;
         #[cfg(feature = "verbose")] {
-            println!("\tValidated with a concrete execution");
+            std::println!("\tValidated with a concrete execution");
         }
         return Ok(())
     }
@@ -851,7 +859,9 @@ impl State {
     */
 
     pub fn check_eq(&self, other: &State) -> bool {
-        eprintln!("ADMITTED: MemState check_eq");
+        #[cfg(feature = "verbose")] {
+            std::eprintln!("ADMITTED: MemState check_eq");
+        }
         self.pc == other.pc
             && self.regs == other.regs
     }

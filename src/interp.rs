@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 use crate::Addr;
 use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 use crate::kernel::{Proof, ReachProof, PropId};

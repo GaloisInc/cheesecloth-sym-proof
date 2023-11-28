@@ -6,6 +6,7 @@ mod imp_interner {
     #![cfg_attr(feature = "playback_term_table", allow(dead_code))]
     use core::cell::RefCell;
     use std::collections::HashSet;
+    use std::thread_local;
     use core::hash::{Hash, Hasher};
     use core::marker::PhantomData;
     use core::mem::{self, ManuallyDrop};
@@ -224,11 +225,11 @@ impl Term {
     }
 
     #[cfg(feature = "verbose")]
-    pub fn as_const_or_err(&self) -> Result<Word, String> {
+    pub fn as_const_or_err(&self) -> Result<Word, alloc::string::String> {
         use crate::logic::print::Printer;
         match self.kind() {
             TermKind::Const(x) => Ok(x),
-            ref t => Err(format!("expected const, but got {}", Printer::new(0).display(t))),
+            ref t => Err(alloc::format!("expected const, but got {}", Printer::new(0).display(t))),
         }
     }
 

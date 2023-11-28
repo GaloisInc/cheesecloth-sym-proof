@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 use std::collections::HashMap;
 use core::hash::Hash;
 use crate::advice::Record;
