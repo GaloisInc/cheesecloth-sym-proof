@@ -1,6 +1,6 @@
 use core::iter;
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use witness_checker::mode::if_mode::{self, Mode};
@@ -36,8 +36,8 @@ pub fn load_exec<P: AsRef<Path>>(path: P) -> ExecBody {
     exec
 }
 
-pub fn convert_code(exec: &ExecBody) -> HashMap<Addr, Instr> {
-    let mut m = HashMap::new();
+pub fn convert_code(exec: &ExecBody) -> BTreeMap<Addr, Instr> {
+    let mut m = BTreeMap::new();
     for cs in &exec.program {
         let base_addr = cs.start as Addr;
         for (i, &ram_instr) in cs.instrs.iter().enumerate() {
@@ -146,8 +146,8 @@ pub fn convert_opcode(ram_opcode: types::Opcode) -> Option<Opcode> {
     })
 }
 
-pub fn convert_mem(exec: &ExecBody) -> HashMap<Addr, Word> {
-    let mut m = HashMap::new();
+pub fn convert_mem(exec: &ExecBody) -> BTreeMap<Addr, Word> {
+    let mut m = BTreeMap::new();
     for ms in &exec.init_mem {
         let base_addr = ms.start as Addr * WORD_BYTES;
         let words = ms.data.iter().copied().chain(iter::repeat(0)).take(ms.len as usize);

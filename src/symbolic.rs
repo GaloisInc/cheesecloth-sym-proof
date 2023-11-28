@@ -1,6 +1,6 @@
 use core::cell::RefCell;
 #[cfg(feature = "verbose")] use alloc::format;
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 use crate::{Word, WORD_BYTES, Addr};
 use crate::advice::map::AMap;
 use crate::advice::vec::AVec;
@@ -174,7 +174,7 @@ fn copy_from_generic<D: Memory, S: Memory>(
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemConcrete {
-    pub m: HashMap<Addr, Word>,
+    pub m: BTreeMap<Addr, Word>,
 }
 
 impl Memory for MemConcrete {
@@ -205,7 +205,7 @@ impl Memory for MemConcrete {
 
 impl MemConcrete {
     pub fn new() -> MemConcrete {
-        MemConcrete { m: HashMap::new() }
+        MemConcrete { m: BTreeMap::new() }
     }
 }
 
@@ -401,7 +401,7 @@ pub struct MemSnapshot {
 
 #[cfg(not(feature = "microram"))]
 std::thread_local! {
-    static SNAPSHOT_DATA: RefCell<HashMap<Addr, Word>> = RefCell::new(HashMap::new());
+    static SNAPSHOT_DATA: RefCell<BTreeMap<Addr, Word>> = RefCell::new(BTreeMap::new());
 }
 
 impl Memory for MemSnapshot {
@@ -444,7 +444,7 @@ impl MemSnapshot {
     }
 
     #[cfg(not(feature = "microram"))]
-    pub fn init_data(m: HashMap<Addr, Word>) {
+    pub fn init_data(m: BTreeMap<Addr, Word>) {
         SNAPSHOT_DATA.with(|c| {
             *c.borrow_mut() = m;
         });
@@ -836,7 +836,7 @@ impl State {
 
     
     #[cfg(feature = "debug_symbolic")]
-    fn validate_mem(&self, _conc_mem: &HashMap<u64, u64>) -> Result<(), Error> {
+    fn validate_mem(&self, _conc_mem: &BTreeMap<u64, u64>) -> Result<(), Error> {
         // Not yet implemented
         return Ok(())
     }

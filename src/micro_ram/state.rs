@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 use crate::{Word, WORD_BYTES, Addr};
 use crate::micro_ram::{Reg, Operand, Opcode, Instr, MemWidth, NUM_REGS};
 
@@ -8,7 +8,7 @@ pub struct State {
     pub pc: Addr,
     pub cycle: Word,
     pub regs: [Word; NUM_REGS],
-    pub mem: HashMap<Addr, Word>,
+    pub mem: BTreeMap<Addr, Word>,
 }
 
 impl Default for State {
@@ -17,7 +17,7 @@ impl Default for State {
             pc: 0,
             cycle: 0,
             regs: [0; NUM_REGS],
-            mem: HashMap::new(),
+            mem: BTreeMap::new(),
         }
     }
 }
@@ -116,7 +116,7 @@ impl State {
 }
 
 
-pub fn mem_store(mem: &mut HashMap<Addr, Word>, w: MemWidth, addr: Addr, val: Word) {
+pub fn mem_store(mem: &mut BTreeMap<Addr, Word>, w: MemWidth, addr: Addr, val: Word) {
     let w = w.bytes();
     assert!(addr % w == 0, "misaligned access at address 0x{:x}", addr);
     debug_assert!(w <= WORD_BYTES);
@@ -135,7 +135,7 @@ pub fn mem_store(mem: &mut HashMap<Addr, Word>, w: MemWidth, addr: Addr, val: Wo
     }
 }
 
-pub fn mem_load(mem: &HashMap<Addr, Word>, w: MemWidth, addr: Addr) -> Word {
+pub fn mem_load(mem: &BTreeMap<Addr, Word>, w: MemWidth, addr: Addr) -> Word {
     let w = w.bytes();
     assert!(addr % w == 0, "misaligned access at address 0x{:x}", addr);
     debug_assert!(w <= WORD_BYTES);
