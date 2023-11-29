@@ -676,7 +676,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     #[cfg(feature = "debug_symbolic")]
     pub fn print_conc_st(&self) {
-        #[cfg(feature = "verbose")] {
+        #[cfg(all(feature = "verbose", not(feature = "microram")))] {
             eprintln!("CONCRETE REGS: {:?}",self.state.conc_st.clone().map(|st| st.regs));
         }
     }

@@ -1,4 +1,4 @@
-use core::convert::TryInto;
+use core::convert::{TryFrom, TryInto};
 use crate::BinOp;
 use crate::logic::{Term, TermKind, VarId};
 use serde::{Serialize, Deserialize};
@@ -21,12 +21,14 @@ pub use self::playback_microram as playback;
 /// In cases where `TermKind` contains a `Term` pointer, `RawTermKind` may represent the term
 /// either as an index or as a pointer.  `recording` uses indices, while `playback` uses pointers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
+#[serde(from = "SerializeRawTermKind", into = "SerializeRawTermKind")]
 pub struct RawTermKind {
-    tag: usize,
-    x: usize,
-    y: usize,
-    z: usize,
+    pub tag: usize,
+    pub x: *const u8,
+    pub y: *const u8,
+    pub z: *const u8,
 }
+unsafe impl Sync for RawTermKind {}
 
 impl RawTermKind {
     const TAG_CONST: usize = 0;
@@ -37,16 +39,47 @@ impl RawTermKind {
 }
 
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
+pub struct SerializeRawTermKind {
+    pub tag: usize,
+    pub x: usize,
+    pub y: usize,
+    pub z: usize,
+}
+
+impl From<RawTermKind> for SerializeRawTermKind {
+    fn from(k: RawTermKind) -> SerializeRawTermKind {
+        SerializeRawTermKind {
+            tag: k.tag,
+            x: k.x as usize,
+            y: k.y as usize,
+            z: k.z as usize,
+        }
+    }
+}
+
+impl From<SerializeRawTermKind> for RawTermKind {
+    fn from(k: SerializeRawTermKind) -> RawTermKind {
+        RawTermKind {
+            tag: k.tag,
+            x: k.x as *const u8,
+            y: k.y as *const u8,
+            z: k.z as *const u8,
+        }
+    }
+}
+
+
 impl RawTermKind {
     #[cfg_attr(not(feature = "playback_term_table"), allow(dead_code))]
-    fn to_term_kind(&self, mut convert_term: impl FnMut(usize) -> Term) -> TermKind {
+    fn to_term_kind(&self, mut convert_term: impl FnMut(*const u8) -> Term) -> TermKind {
         match self.tag {
             RawTermKind::TAG_CONST => {
-                let x = self.x.try_into().unwrap();
+                let x = (self.x as usize).try_into().unwrap();
                 TermKind::Const(x)
             },
             RawTermKind::TAG_VAR => {
-                let v = VarId::from_raw(self.x.try_into().unwrap());
+                let v = VarId::from_raw((self.x as usize).try_into().unwrap());
                 TermKind::Var(v)
             },
             RawTermKind::TAG_NOT => {
@@ -54,7 +87,7 @@ impl RawTermKind {
                 TermKind::Not(a)
             },
             RawTermKind::TAG_BINARY => {
-                let op = BinOp::from_raw(self.x.try_into().unwrap());
+                let op = BinOp::from_raw((self.x as usize).try_into().unwrap());
                 let a = convert_term(self.y);
                 let b = convert_term(self.z);
                 TermKind::Binary(op, a, b)
@@ -69,44 +102,47 @@ impl RawTermKind {
         }
     }
 
-    fn from_term_kind(kind: TermKind, mut convert_term: impl FnMut(Term) -> usize) -> RawTermKind {
-        let [tag, x, y, z] = match kind {
-            TermKind::Const(x) => [
+    fn from_term_kind(
+        kind: TermKind,
+        mut convert_term: impl FnMut(Term) -> *const u8,
+    ) -> RawTermKind {
+        let (tag, x, y, z) = match kind {
+            TermKind::Const(x) => (
                 RawTermKind::TAG_CONST,
-                x.try_into().unwrap(),
-                0,
-                0,
-            ],
-            TermKind::Var(v) => [
+                usize::try_from(x).unwrap() as *const u8,
+                0 as *const u8,
+                0 as *const u8,
+            ),
+            TermKind::Var(v) => (
                 RawTermKind::TAG_VAR,
-                v.as_raw().try_into().unwrap(),
-                0,
-                0,
-            ],
-            TermKind::Not(a) => [
+                usize::try_from(v.as_raw()).unwrap() as *const u8,
+                0 as *const u8,
+                0 as *const u8,
+            ),
+            TermKind::Not(a) => (
                 RawTermKind::TAG_NOT,
                 convert_term(a),
-                0,
-                0,
-            ],
-            TermKind::Binary(op, a, b) => [
+                0 as *const u8,
+                0 as *const u8,
+            ),
+            TermKind::Binary(op, a, b) => (
                 RawTermKind::TAG_BINARY,
-                op.as_raw().try_into().unwrap(),
+                usize::try_from(op.as_raw()).unwrap() as *const u8,
                 convert_term(a),
                 convert_term(b),
-            ],
-            TermKind::Mux(a, b, c) => [
+            ),
+            TermKind::Mux(a, b, c) => (
                 RawTermKind::TAG_MUX,
                 convert_term(a),
                 convert_term(b),
                 convert_term(c),
-            ],
+            ),
         };
         RawTermKind { tag, x, y, z }
     }
 
     /// Modify all sub-`Term` pointers in-place by applying `f` to each one.
-    fn adjust_pointers(&mut self, mut f: impl FnMut(usize) -> usize) {
+    fn adjust_pointers(&mut self, mut f: impl FnMut(*const u8) -> *const u8) {
         match self.tag {
             RawTermKind::TAG_CONST => {
                 // No pointers

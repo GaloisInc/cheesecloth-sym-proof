@@ -109,6 +109,7 @@ impl<'a> Program<'a> {
     }
 
     pub fn get(&self, pc: Addr) -> Option<&Instr> {
+        // TODO: use advice for this lookup
         let chunk = self.chunks.iter().rfind(|c| c.start_addr <= pc)?;
         // If `try_from` fails, it must be the case that the `offset` would be out of bounds for
         // the chunk, which can't possibly have `len` in excess of `usize::MAX`.

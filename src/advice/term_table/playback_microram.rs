@@ -10,23 +10,23 @@ use super::RawTermKind;
 
 
 // TODO
-const TABLE_CAPACITY: usize = 65536;
+const TERM_TABLE_CAPACITY: usize = 65536;
 
 extern "C" {
-    static TABLE: [RawTermKind; TABLE_CAPACITY];
-    static TABLE_LEN: usize;
+    static TERM_TABLE: [RawTermKind; TERM_TABLE_CAPACITY];
+    static TERM_TABLE_LEN: usize;
 }
 
 // FIXME: validate TABLE_LEN <= TABLE_CAPACITY
 // FIXME: validate entries in TABLE
 
 pub fn len() -> usize {
-    unsafe { TABLE_LEN }
+    unsafe { TERM_TABLE_LEN }
 }
 
 fn table() -> &'static [RawTermKind] {
     unsafe {
-        &*TABLE.get_unchecked(..TABLE_LEN)
+        &*TERM_TABLE.get_unchecked(..TERM_TABLE_LEN)
     }
 }
 

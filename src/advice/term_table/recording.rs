@@ -30,7 +30,7 @@ pub fn record(t: Term) {
     TABLE.with(|table| {
         let mut table = table.borrow_mut();
 
-        let raw = RawTermKind::from_term_kind(t.kind(), |t| table.get_index(t));
+        let raw = RawTermKind::from_term_kind(t.kind(), |t| table.get_index(t) as *const u8);
         let idx = table.terms.len();
         table.terms.push(raw);
 

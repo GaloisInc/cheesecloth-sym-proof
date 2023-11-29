@@ -19,6 +19,11 @@ pub mod vec;
 
 pub type Value = u64;
 
+#[cfg(feature = "microram")]
+extern "C" {
+    fn __cc_advise(max: Value) -> Value;
+}
+
 
 #[allow(dead_code)]
 struct FakeThreadLocal<T>(pub T);
@@ -270,6 +275,7 @@ impl PlaybackStream {
         Ok(())
     }
 
+    #[cfg(not(feature = "microram"))]
     pub fn take(&mut self) -> Value {
         assert!(self.inited, "tried to read from uninitialized stream");
         assert!(self.pos < self.buf.len(), "tried to read past end of stream (at {})", self.pos);
@@ -281,10 +287,21 @@ impl PlaybackStream {
         v
     }
 
+    #[cfg(not(feature = "microram"))]
     pub fn take_bounded(&mut self, max: Value) -> Value {
         let v = self.take();
         assert!(v <= max);
         v
+    }
+
+    #[cfg(feature = "microram")]
+    pub fn take(&mut self) -> Value {
+        unsafe { __cc_advise(Value::MAX) }
+    }
+
+    #[cfg(feature = "microram")]
+    pub fn take_bounded(&mut self, max: Value) -> Value {
+        unsafe { __cc_advise(max) }
     }
 }
 

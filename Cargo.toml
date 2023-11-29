@@ -21,7 +21,7 @@ bumpalo = "3.14.0"
 [features]
 verbose = []
 debug_symbolic = []
-microram = []
+microram = ["stage4"]
 deny_warnings = []
 
 stage0 = [

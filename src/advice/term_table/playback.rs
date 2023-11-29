@@ -49,7 +49,7 @@ pub fn get_index(index: usize) -> &'static RawTermKind {
 pub fn kind_to_index(kind: TermKind) -> usize {
     TABLE.with(|table| {
         let table = table.borrow();
-        let raw = RawTermKind::from_term_kind(kind, |t| t.as_ptr() as usize);
+        let raw = RawTermKind::from_term_kind(kind, |t| t.as_ptr() as *const u8);
         table.kind_index.get(&raw).copied()
             .unwrap_or_else(|| panic!("failed to find {:?} ({:?}) in table", kind, raw))
     })
@@ -61,8 +61,8 @@ pub unsafe fn term_kind_from_raw(raw: RawTermKind) -> TermKind {
     #[cfg(feature = "playback_term_table")]
     unsafe {
         use crate::logic::Term;
-        return raw.to_term_kind(|ptr_usize| {
-            Term::from_raw(&*(ptr_usize as *const RawTermKind))
+        return raw.to_term_kind(|ptr| {
+            Term::from_raw(&*(ptr as *const RawTermKind))
         });
     }
     #[cfg(not(feature = "playback_term_table"))] {
@@ -88,7 +88,7 @@ pub fn load(r: impl Read) -> serde_cbor::Result<()> {
             let base = terms.as_ptr();
             for raw in terms.iter_mut() {
                 raw.adjust_pointers(|idx| {
-                    base.add(idx) as usize
+                    base.add(idx as usize) as *const u8
                 });
             }
 

@@ -5,7 +5,7 @@
 #![no_std]
 
 extern crate alloc;
-#[cfg(not(feature = "microram"))] extern crate std;
+#[cfg(any(not(feature = "microram"), feature = "verbose"))] extern crate std;
 
 use core::mem;
 
