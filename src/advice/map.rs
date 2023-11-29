@@ -1,6 +1,7 @@
 use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 
 
+#[cfg(not(feature = "microram"))]
 mod imp_btree {
     #![cfg_attr(feature = "playback_amap_keys", allow(dead_code))]
     use core::borrow::Borrow;

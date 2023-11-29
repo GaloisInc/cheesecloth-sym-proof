@@ -3,8 +3,8 @@ use core::convert::{TryFrom, TryInto};
 use core::mem;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use std::io::{Read, Write};
-use std::panic::{self, UnwindSafe};
+#[cfg(not(feature = "microram"))] use std::io::{Read, Write};
+#[cfg(not(feature = "microram"))] use std::panic::{self, UnwindSafe};
 use serde_cbor;
 use crate::{Word, BinOp};
 use crate::logic::{Term, VarId, VarCounter, Binder, Prop, ReachableProp, StatePred};
@@ -20,12 +20,36 @@ pub mod vec;
 pub type Value = u64;
 
 
+#[allow(dead_code)]
+struct FakeThreadLocal<T>(pub T);
+
+unsafe impl<T> Sync for FakeThreadLocal<T> {}
+
+impl<T> FakeThreadLocal<T> {
+    #[allow(dead_code)]
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        f(&self.0)
+    }
+}
+
+
+#[cfg(feature = "microram")]
+macro_rules! thread_local {
+    (
+        static $NAME:ident: $Ty:ty = $init:expr;
+    ) => {
+        static $NAME: $crate::advice::FakeThreadLocal<$Ty> =
+            $crate::advice::FakeThreadLocal($init);
+    };
+}
+
+
 pub struct RecordingStream {
     buf: Vec<Value>,
 }
 
 impl RecordingStream {
-    pub fn new() -> RecordingStream {
+    pub const fn new() -> RecordingStream {
         RecordingStream {
             buf: Vec::new(),
         }
@@ -35,6 +59,7 @@ impl RecordingStream {
         self.buf.push(v);
     }
 
+    #[cfg(not(feature = "microram"))]
     pub fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         serde_cbor::to_writer(w, &self.buf)
     }
@@ -59,6 +84,7 @@ pub trait RecordingStreamTag: Sized + Copy {
         self.put(v.try_into().ok().unwrap());
     }
 
+    #[cfg(not(feature = "microram"))]
     fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         self.with(|rs| mem::replace(rs, RecordingStream::new()).finish(w))
     }
@@ -72,7 +98,7 @@ macro_rules! recording_stream {
     ($name:ident) => {
         pub mod $name {
             use core::cell::RefCell;
-            use std::thread_local;
+            #[cfg(not(feature = "microram"))] use std::thread_local;
             use crate::advice::{RecordingStream, RecordingStreamTag};
 
             thread_local! {
@@ -117,7 +143,7 @@ pub struct ChunkedRecordingStream {
 pub struct ChunkId(usize);
 
 impl ChunkedRecordingStream {
-    pub fn new() -> ChunkedRecordingStream {
+    pub const fn new() -> ChunkedRecordingStream {
         ChunkedRecordingStream {
             chunks: Vec::new(),
         }
@@ -137,6 +163,7 @@ impl ChunkedRecordingStream {
         &mut self.chunks[id.0]
     }
 
+    #[cfg(not(feature = "microram"))]
     pub fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         let buf = self.chunks.into_iter()
             .flat_map(|rs| rs.buf.into_iter())
@@ -168,6 +195,7 @@ pub trait ChunkedRecordingStreamTag: Sized + Copy {
         self.mk_chunk_tag(id)
     }
 
+    #[cfg(not(feature = "microram"))]
     fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         self.with(|crs| mem::replace(crs, ChunkedRecordingStream::new()).finish(w))
     }
@@ -178,7 +206,7 @@ macro_rules! chunked_recording_stream {
     ($name:ident) => {
         pub mod $name {
             use core::cell::RefCell;
-            use std::thread_local;
+            #[cfg(not(feature = "microram"))] use std::thread_local;
             use crate::advice::{
                 RecordingStream, RecordingStreamTag,
                 ChunkedRecordingStream, ChunkedRecordingStreamTag, ChunkId,
@@ -224,7 +252,7 @@ pub struct PlaybackStream {
 }
 
 impl PlaybackStream {
-    pub fn new() -> PlaybackStream {
+    pub const fn new() -> PlaybackStream {
         PlaybackStream {
             buf: Vec::new(),
             pos: 0,
@@ -232,6 +260,7 @@ impl PlaybackStream {
         }
     }
 
+    #[cfg(not(feature = "microram"))]
     pub fn load(&mut self, r: impl Read) -> serde_cbor::Result<()> {
         assert!(!self.inited, "stream has already been initialized");
         let buf = serde_cbor::from_reader(r)?;
@@ -262,6 +291,7 @@ impl PlaybackStream {
 pub trait PlaybackStreamTag: Sized + Copy {
     fn with<R>(self, f: impl FnOnce(&mut PlaybackStream) -> R) -> R;
 
+    #[cfg(not(feature = "microram"))]
     fn load(self, r: impl Read) -> serde_cbor::Result<()> {
         self.with(|ps| ps.load(r))
     }
@@ -308,7 +338,7 @@ macro_rules! playback_stream_inner {
     ($name:ident) => {
         pub mod $name {
             use core::cell::RefCell;
-            use std::thread_local;
+            #[cfg(not(feature = "microram"))] use std::thread_local;
             use crate::advice::{PlaybackStream, PlaybackStreamTag};
 
             thread_local! {
@@ -937,6 +967,7 @@ pub mod playback {
 }
 
 
+#[cfg(not(feature = "microram"))]
 mod load_finish {
     // Helper functions in this module are used only when certain features are enabled.
     #![allow(dead_code)]
@@ -1073,24 +1104,25 @@ mod load_finish {
     }
 }
 
-pub use self::load_finish::{load, finish};
+#[cfg(not(feature = "microram"))] pub use self::load_finish::{load, finish};
 
 
-macro_rules! rollback_on_panic_body {
-    ($f:expr; $($stream:ident),*) => {{
-        $( let $stream = recording::$stream::Tag.with(|rs| rs.snapshot()); )*
-        let r = panic::catch_unwind($f);
-        match r {
-            Ok(x) => x,
-            Err(e) => {
-                $( recording::$stream::Tag.with(|rs| rs.rewind($stream)); )*
-                panic::resume_unwind(e);
-            },
-        }
-    }};
-}
-
+#[cfg(not(feature = "microram"))]
 pub fn rollback_on_panic<F: FnOnce() -> R + UnwindSafe, R>(f: F) -> R {
+    macro_rules! rollback_on_panic_body {
+        ($f:expr; $($stream:ident),*) => {{
+            $( let $stream = recording::$stream::Tag.with(|rs| rs.snapshot()); )*
+            let r = panic::catch_unwind($f);
+            match r {
+                Ok(x) => x,
+                Err(e) => {
+                    $( recording::$stream::Tag.with(|rs| rs.rewind($stream)); )*
+                    panic::resume_unwind(e);
+                },
+            }
+        }};
+    }
+
     rollback_on_panic_body!(
         f;
         rules, props, states, terms, term_index, term_intern_index, search_index, avec_len,

@@ -1,8 +1,8 @@
 use core::cell::RefCell;
 use alloc::boxed::Box;
 #[cfg(not(feature = "playback_term_intern_index"))] use std::collections::HashMap;
-use std::io::Read;
-use std::thread_local;
+#[cfg(not(feature = "microram"))] use std::io::Read;
+#[cfg(not(feature = "microram"))] use std::thread_local;
 use core::mem;
 use serde_cbor;
 use crate::logic::TermKind;
@@ -72,6 +72,7 @@ pub unsafe fn term_kind_from_raw(raw: RawTermKind) -> TermKind {
     }
 }
 
+#[cfg(not(feature = "microram"))]
 pub fn load(r: impl Read) -> serde_cbor::Result<()> {
     TABLE.with(|table| {
         let mut table = table.borrow_mut();

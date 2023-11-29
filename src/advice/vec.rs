@@ -2,6 +2,7 @@ use core::fmt;
 use core::slice;
 use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 
+#[cfg(not(feature = "microram"))]
 mod imp_vec {
     use core::iter::FromIterator;
     use core::ops::{Deref, DerefMut};

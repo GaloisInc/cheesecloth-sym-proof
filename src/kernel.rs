@@ -843,6 +843,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Try to take a step.  Returns `true` on success or `false` if `rule_step` panics.  On
     /// failure, the proof state remains unchanged.
+    #[cfg(not(feature = "microram"))]
     pub fn try_rule_step(&mut self) -> Result<(),String> {
         use std::panic::{self, AssertUnwindSafe};
 
@@ -882,6 +883,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     /// constant. On loads, it can still sneak symbolic values from
     /// memory into registers. On failure, the proof state remains
     /// unchanged.
+    #[cfg(not(feature = "microram"))]
     pub fn try_rule_step_concrete(&mut self) -> Result<(),String> {
         let instr = self.fetch_instr();
         let x = self.reg_value(instr.r1);

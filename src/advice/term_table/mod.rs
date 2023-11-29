@@ -4,8 +4,16 @@ use crate::logic::{Term, TermKind, VarId};
 use serde::{Serialize, Deserialize};
 
 
+#[cfg(not(feature = "microram"))]
 pub mod recording;
+#[cfg(not(feature = "microram"))]
 pub mod playback;
+
+#[cfg(feature = "microram")]
+pub mod playback_microram;
+#[cfg(feature = "microram")]
+pub use self::playback_microram as playback;
+
 
 
 /// A raw representation of a `TermKind`.  This is `repr(C)` so it can be used in secret inputs.
