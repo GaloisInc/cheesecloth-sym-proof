@@ -147,7 +147,7 @@ impl Memory for MemMap {
         // contain the next consecutive byte in order (starting from zero), and all bytes should be
         // extracted from the same expression.
         let val = match self.m.get(&addr) {
-            Some(&(ref t, offset)) => {
+            Some(&(t, offset)) => {
                 if offset != 0 {
                     return Err(format!("NYI: load requires splicing bytes: \
                         at 0x{:x}, got offset {}, but expected 0", addr, offset));
@@ -162,7 +162,7 @@ impl Memory for MemMap {
 
         for offset in 1 .. w.bytes() {
             match self.m.get(&(addr + offset)) {
-                Some(&(ref t, loaded_offset)) => {
+                Some(&(t, loaded_offset)) => {
                     if loaded_offset != offset as u8 {
                         return Err(format!("NYI: load requires splicing bytes: \
                             at 0x{:x}, got offset {}, but expected {}",
@@ -171,7 +171,7 @@ impl Memory for MemMap {
                     if t != val {
                         return Err(format!("NYI: load requires splicing bytes: \
                             at 0x{:x}, got term {}, but expected {}",
-                            addr + offset, debug_print(t), debug_print(&val)));
+                            addr + offset, debug_print(&t), debug_print(&val)));
                     }
                 },
                 None => {
@@ -193,7 +193,7 @@ impl Memory for MemMap {
 impl Visit for MemMap {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
         let MemMap { ref m, max: _ } = *self;
-        for &(ref t, _) in m.values() {
+        for &(t, _) in m.values() {
             t.visit_with(f);
         }
     }
@@ -203,7 +203,7 @@ impl Fold for MemMap {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
         let MemMap { ref m, max } = *self;
         MemMap {
-            m: m.iter().map(|(&a, &(ref t, b))| (a, (t.fold_with(f), b))).collect(),
+            m: m.iter().map(|(&a, &(t, b))| (a, (t.fold_with(f), b))).collect(),
             max,
         }
     }
@@ -270,7 +270,7 @@ impl Memory for MemLog {
 impl Visit for MemLog {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
         let MemLog { ref l } = *self;
-        for &(ref addr, ref val, _) in l {
+        for &(addr, val, _) in l {
             addr.visit_with(f);
             val.visit_with(f);
         }
@@ -281,7 +281,7 @@ impl Fold for MemLog {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
         let MemLog { ref l } = *self;
         MemLog {
-            l: l.iter().map(|&(ref a, ref v, w)| (a.fold_with(f), v.fold_with(f), w)).collect(),
+            l: l.iter().map(|&(a, v, w)| (a.fold_with(f), v.fold_with(f), w)).collect(),
         }
     }
 }
@@ -354,7 +354,7 @@ impl MemMulti {
                 let var = Term::var_unchecked(var);
                 (var.clone(), Term::add(var, Term::const_(len)), MemRegionKind::Object, i)
             }))
-            .chain(self.sym.iter().enumerate().map(|(i, &(ref start, ref end, _))| {
+            .chain(self.sym.iter().enumerate().map(|(i, &(start, end, _))| {
                 (start.clone(), end.clone(), MemRegionKind::Symbolic, i)
             }));
         for (start, end, kind, i) in region_iter {
@@ -398,7 +398,7 @@ impl Visit for MemMulti {
             v.visit_with(f);
             m.visit_with(f);
         }
-        for &(ref a1, ref a2, ref m) in sym {
+        for &(a1, a2, ref m) in sym {
             a1.visit_with(f);
             a2.visit_with(f);
             m.visit_with(f);
@@ -412,7 +412,7 @@ impl Fold for MemMulti {
         MemMulti {
             conc: conc.iter().map(|&(a1, a2, ref m)| (a1, a2, m.fold_with(f))).collect(),
             objs: objs.iter().map(|&(v, n, ref m)| (v.fold_with(f), n, m.fold_with(f))).collect(),
-            sym: sym.iter().map(|&(ref a1, ref a2, ref m)| {
+            sym: sym.iter().map(|&(a1, a2, ref m)| {
                 (a1.fold_with(f), a2.fold_with(f), m.fold_with(f))
             }).collect(),
         }

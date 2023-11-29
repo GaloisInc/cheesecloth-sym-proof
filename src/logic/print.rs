@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::rc::Rc;
 use crate::BinOp;
-use super::{VarId, Term, TermInner, Prop, StepProp, ReachableProp, StatePred, Binder, VarCounter};
+use super::{VarId, Term, TermKind, Prop, StepProp, ReachableProp, StatePred, Binder, VarCounter};
 
 
 
@@ -97,20 +97,19 @@ impl Print for VarId {
 
 impl Print for Term {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.print(p, f)
+        self.kind().print(p, f)
     }
 }
 
-impl Print for TermInner {
+impl Print for TermKind {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            TermInner::Const(x) => write!(f, "{}", x as i64),
-            TermInner::Var(v) => v.print(p, f),
-            TermInner::Not(ref t) => write!(f, "!{}", p.display(t)),
-            TermInner::Binary(op, ref xy) => {
-                let (ref x, ref y) = **xy;
-                let x = p.display(x);
-                let y = p.display(y);
+            TermKind::Const(x) => write!(f, "{}", x as i64),
+            TermKind::Var(v) => v.print(p, f),
+            TermKind::Not(t) => write!(f, "!{}", p.display(&t)),
+            TermKind::Binary(op, x, y) => {
+                let x = p.display(&x);
+                let y = p.display(&y);
                 match op {
                     BinOp::And => write!(f, "({} & {})", x, y),
                     BinOp::Or => write!(f, "({} | {})", x, y),
@@ -131,11 +130,10 @@ impl Print for TermInner {
                     BinOp::Cmpge => write!(f, "({} >=s {})", x, y),
                 }
             },
-            TermInner::Mux(ref cte) => {
-                let (ref c, ref t, ref e) = **cte;
-                let c = p.display(c);
-                let t = p.display(t);
-                let e = p.display(e);
+            TermKind::Mux(c, t, e) => {
+                let c = p.display(&c);
+                let t = p.display(&t);
+                let e = p.display(&e);
                 write!(f, "mux({}, {}, {})", c, t, e)
             },
         }
@@ -145,7 +143,7 @@ impl Print for TermInner {
 impl Print for Prop {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Prop::Nonzero(ref t) => t.print(p, f),
+            Prop::Nonzero(t) => t.print(p, f),
 
             Prop::Forall(ref b) => {
                 print_binder(p, f, BinderMode::Forall, &b.vars)?;
@@ -207,11 +205,11 @@ fn print_binder(
 
 impl Print for StepProp {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
-        let StepProp { ref pre, ref post, ref min_cycles } = *self;
+        let StepProp { ref pre, ref post, min_cycles } = *self;
         write!(
             f, "{{{}}} ->({}) {{{}}}",
             p.display(&PrintBinder(BinderMode::Exists, pre)),
-            p.display(min_cycles),
+            p.display(&min_cycles),
             p.display(&PrintBinder(BinderMode::Exists, post)),
         )
     }
@@ -219,10 +217,10 @@ impl Print for StepProp {
 
 impl Print for ReachableProp {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
-        let ReachableProp { ref pred, ref min_cycles } = *self;
+        let ReachableProp { ref pred, min_cycles } = *self;
         write!(
             f, "{{init}} ->({}) {{{}}}",
-            p.display(min_cycles),
+            p.display(&min_cycles),
             p.display(&PrintBinder(BinderMode::Exists, pred)),
         )
     }

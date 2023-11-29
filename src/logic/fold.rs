@@ -1,5 +1,5 @@
 use std::array;
-use super::{VarId, Term, TermInner, Prop, StepProp, ReachableProp, StatePred, Binder};
+use super::{VarId, Term, TermKind, Prop, StepProp, ReachableProp, StatePred, Binder};
 
 
 pub trait Folder {
@@ -19,16 +19,14 @@ pub fn default_fold_var_id<F: Folder + ?Sized>(_f: &mut F, x: VarId) -> VarId {
 }
 
 pub fn default_fold_term<F: Folder + ?Sized>(f: &mut F, x: &Term) -> Term {
-    match x.0 {
-        TermInner::Const(x) => Term::const_(x),
-        TermInner::Var(v) => Term::var_unchecked(v.fold_with(f)),
-        TermInner::Not(ref t) => Term::not(t.fold_with(f)),
-        TermInner::Binary(op, ref ts) => {
-            let (ref a, ref b) = **ts;
+    match *x.kind() {
+        TermKind::Const(x) => Term::const_(x),
+        TermKind::Var(v) => Term::var_unchecked(v.fold_with(f)),
+        TermKind::Not(t) => Term::not(t.fold_with(f)),
+        TermKind::Binary(op, a, b) => {
             Term::binary(op, a.fold_with(f), b.fold_with(f))
         },
-        TermInner::Mux(ref ts) => {
-            let (ref a, ref b, ref c) = **ts;
+        TermKind::Mux(a, b, c) => {
             Term::mux(a.fold_with(f), b.fold_with(f), c.fold_with(f))
         },
     }
@@ -62,7 +60,7 @@ impl Fold for Term {
 impl Fold for Prop {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
         match *self {
-            Prop::Nonzero(ref t) => Prop::Nonzero(t.fold_with(f)),
+            Prop::Nonzero(t) => Prop::Nonzero(t.fold_with(f)),
             Prop::Forall(ref b) => {
                 Prop::Forall(f.fold_binder(b, |f, x| {
                     let (ref ps, ref q) = *x;
@@ -77,7 +75,7 @@ impl Fold for Prop {
 
 impl Fold for StepProp {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
-        let StepProp { ref pre, ref post, ref min_cycles } = *self;
+        let StepProp { ref pre, ref post, min_cycles } = *self;
         StepProp {
             pre: pre.fold_with(f),
             post: post.fold_with(f),
@@ -88,7 +86,7 @@ impl Fold for StepProp {
 
 impl Fold for ReachableProp {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
-        let ReachableProp { ref pred, ref min_cycles } = *self;
+        let ReachableProp { ref pred, min_cycles } = *self;
         ReachableProp {
             pred: pred.fold_with(f),
             min_cycles: min_cycles.fold_with(f),

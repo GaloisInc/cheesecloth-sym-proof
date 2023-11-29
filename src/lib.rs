@@ -16,7 +16,7 @@ pub const WORD_BYTES: Word = mem::size_of::<Word>() as Word;
 pub const WORD_BITS: Word = WORD_BYTES * 8;
 pub type Addr = Word;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum BinOp {
     And,
     Or,
