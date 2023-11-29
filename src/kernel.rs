@@ -615,7 +615,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     
     fn fetch_instr(&self) -> Instr {
         let pc = self.pc();
-	self.get_instr_at(pc)
+        self.get_instr_at(pc)
     }
 
     fn reg_value(&self, reg: Reg) -> Term {
@@ -647,7 +647,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     fn finish_instr_jump(&mut self, pc: Addr) {
         self.state.pc = pc;
         self.cycles += 1;
-	self.conc_step();
+        self.conc_step();
     }
 
     fn fresh_var(&mut self) -> Term {
@@ -655,12 +655,12 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     }
 
     fn conc_step(&mut self) {
-	// We shouldn't have advice in proofs.
-	// Advice should be handled explicitely.
-	let advice = None;
-	let conc_pc = self.state.conc_pc().unwrap_or(0);
-	let instr = self.get_instr_at(conc_pc);
-	self.state.conc_step(instr, advice);
+        // We shouldn't have advice in proofs.
+        // Advice should be handled explicitely.
+        let advice = None;
+        let conc_pc = self.state.conc_pc().unwrap_or(0);
+        let instr = self.get_instr_at(conc_pc);
+        self.state.conc_step(instr, advice);
     }
 
     /// Introduce a new unconstrained variable.

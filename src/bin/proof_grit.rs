@@ -100,7 +100,7 @@ fn run(path: &str) -> Result<(), String> {
                                 // Memory in the initial state is an empty `MemLog`, which implies
                                 // that nothing is known about memory.
                                 mem: MemState::Log(MemLog::new()),
-				conc_st: Some (conc_state.clone()),
+                                conc_st: Some (conc_state.clone()),
                             },
                             props: vec![].into(),
                         }
@@ -192,7 +192,7 @@ fn run(path: &str) -> Result<(), String> {
                     }
                 }),
                 mem: MemState::Log(MemLog { l: Vec::new() }),
-		conc_st: Some (conc_state.clone()),
+                conc_st: Some (conc_state.clone()),
             },
             props: vec![].into(),
         }
@@ -282,7 +282,7 @@ fn run(path: &str) -> Result<(), String> {
                     pc: conc_state.pc,
                     regs: conc_state.regs.map(|x| x.into()),
                     mem: MemState::Log(MemLog::new()),
-		    conc_st: Some (conc_state.clone()),
+                    conc_st: Some (conc_state.clone()),
                 },
                 props: Box::new([]),
             }
