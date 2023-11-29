@@ -40,7 +40,7 @@ impl Folder for SubstFolder<'_> {
 
 pub trait SubstExt: Sized {
     /// Substitute `terms` for the free variables of `Self`.  Only the immediate free variables
-    /// (those in scope 0 at top level, or scope `k` when under `k` binders) will be subsbtituted;
+    /// (those in scope 0 at top level, or scope `k` when under `k` binders) will be substituted;
     /// free variables from outer scopes will be left unchanged.
     ///
     /// TODO: we also shift some vars, on the assumption that we're removing a binder

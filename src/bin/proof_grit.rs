@@ -13,16 +13,19 @@ use std::array;
 use std::env;
 use env_logger;
 use log::trace;
-use sym_proof::logic::{Term, Prop, Binder, VarCounter, StepProp, StatePred, VarId};
+use sym_proof::kernel::Proof;
+use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred};
 use sym_proof::logic::shift::ShiftExt;
+use sym_proof::micro_ram::Program;
 use sym_proof::micro_ram::import;
-use sym_proof::proof::Proof;
 use sym_proof::symbolic::{self, MemState, MemLog};
+use sym_proof::tactics::{Tactics, ReachTactics};
 
 fn run(path: &str) -> Result<(), String> {
     let exec = import::load_exec(path);
 
-    let prog = import::convert_code(&exec);
+    let (instrs, chunks) = import::convert_code_split(&exec);
+    let prog = Program::new(&instrs, &chunks);
     eprintln!("loaded code: {} instrs", prog.len());
     let init_state = import::convert_init_state(&exec);
     eprintln!("loaded memory: {} words", init_state.mem.len());
@@ -37,14 +40,14 @@ fn run(path: &str) -> Result<(), String> {
     // Run to the start of the first `memcpy`.
     let memcpy_addr = exec.labels["memcpy#39"];
     while conc_state.pc != memcpy_addr {
-        let instr = prog[&conc_state.pc];
+        let instr = prog[conc_state.pc];
         conc_state.step(instr, None);
     }
     // Run concretely: 8 steps to the start of the loop, then 11 more steps to run the first
     // iteration up to the condition check.  The loop is structured as a do/while, so the condition
     // check comes at the end.
     for _ in 0 .. 8 + 11 {
-        let instr = prog[&conc_state.pc];
+        let instr = prog[conc_state.pc];
         eprintln!("run concrete [{}]: {:?}", conc_state.pc, instr);
         conc_state.step(instr, None);
     }
@@ -55,204 +58,257 @@ fn run(path: &str) -> Result<(), String> {
     }
 
 
-    let _lemmas = Proof::prove(&prog, |pf| {
-        // ----------------------------------------
-        // Prove a single iteration
-        // ----------------------------------------
+    // ----------------------------------------
+    // Set up the proof state
+    // ----------------------------------------
+    let mut pf = Proof::new(prog);
 
-        // We first prove a lemma of the form:
-        //      forall n, n > 0 -> {r12 = n} ->* {r12 = n - 1}
-        // The proof is done by running symbolic execution.
-        eprintln!("\nprove l_iter");
-        let l_iter = pf.rule_forall_intro(
-            |vars| {
-                // Set up the variables and premises.  There is only one variable, `n`, and only
-                // one premise, `n > 0`.  The `Term` representing `n` will be passed through to the
-                // proof callback.
-                let n = vars.fresh();
-                (vec![Prop::Nonzero(Term::cmpa(n.clone(), 0.into()))], n)
+
+    // ----------------------------------------
+    // Prove a single iteration
+    // ----------------------------------------
+
+    // We first prove a lemma of the form:
+    //      forall b n, n > 0 -> R({r12 = n}, b) -> R({r12 = n - 1}, b + 13)
+    // The proof is done by running symbolic execution.
+    eprintln!("\nprove p_iter");
+    let p_iter = pf.tactic_forall_intro(
+        |vars| {
+            // Set up the variables and premises.  There is only one variable, `n`, and only
+            // one premise, `n > 0`.  The `Term` representing `n` will be passed through to the
+            // proof callback.
+            let b = vars.fresh();
+            let n = vars.fresh();
+            (vec![
+                Prop::Nonzero(Term::cmpa(n.clone(), 0.into())),
+                Prop::Reachable(ReachableProp {
+                    pred: Binder::new(|vars| {
+                        let n = n.shift();
+                        StatePred {
+                            state: symbolic::State {
+                                pc: conc_state.pc,
+                                regs: array::from_fn(|r| {
+                                    // We unconditionally allocate a var for each reg so that
+                                    // almost all registers will be set to the same-numbered var:
+                                    // `rN = xN`.
+                                    let v = vars.fresh();
+                                    match r {
+                                        12 => n.clone(),
+                                        _ => v,
+                                    }
+                                }),
+                                // Memory in the initial state is an empty `MemLog`, which implies
+                                // that nothing is known about memory.
+                                mem: MemState::Log(MemLog::new()),
+                            },
+                            props: vec![].into(),
+                        }
+                    }),
+                    min_cycles: b.clone(),
+                }),
+            ], n)
+        },
+        |pf, n| {
+            // Prove the conclusion.
+            //pf.show_context();
+            let p_reach = (1, 1);
+
+            // From the premise `n > 0`, we can derive `n != 0`, which is needed to show that
+            // the jump is taken.
+            //
+            // We do this part early because the last lemma proved within this closure becomes
+            // the conclusion of the `forall`.
+            // TODO: pf.rule_gt_ne_unsigned(n.clone(), 0.into())?;
+            let p_ne = pf.tactic_admit(
+                Prop::Nonzero(Term::cmpe(Term::cmpe(n.clone(), 0.into()), 0.into())));
+            let (p_reach, p_ne) = pf.tactic_swap(p_reach, p_ne);
+            let _ = p_ne;
+
+            pf.tactic_reach_extend(p_reach, |rpf| {
+                //rpf.show_context();
+                //rpf.show_state();
+
+                // Symbolic execution through one iteration of the loop.
+                rpf.tactic_run();
+                rpf.rule_step_jump(true);
+                rpf.tactic_run();
+                rpf.rule_step_load_fresh();
+                rpf.tactic_run_until(conc_state.pc);
+
+                // Erase information about memory and certain registers to make it easier to
+                // sequence this `StepProp` with itself.
+                for &r in &[11, 13, 14, 15, 32] {
+                    rpf.rule_forget_reg(r);
+                }
+                rpf.rule_forget_mem();
+
+                //rpf.show_state();
+            });
+
+            // Rename variables so the final state uses the same names as the initial state.
+            pf.tactic_reach_rename_vars(p_reach, |vars| {
+                let mut var_map = [None; 39];
+                for i in 0 .. 33 {
+                    var_map[i] = Some(vars.fresh_var().index());
+                }
+                var_map[34] = var_map[11];
+                var_map[35] = var_map[13];
+                var_map[36] = var_map[14];
+                var_map[37] = var_map[15];
+                var_map[38] = var_map[32];
+                var_map
+            });
+        },
+    );
+
+
+    // ----------------------------------------
+    // Prove the full loop by induction
+    // ----------------------------------------
+
+    // We are proving the following statement:
+    //
+    //      forall n,
+    //          n < 1000 ->
+    //          forall b,
+    //              reach(b, {r12 = n}) ->
+    //              reach(b + n * 13, {r12 = 0})
+    //
+    // We separate the binders for `b` and `n` because `tactic_induction` expects to see only a
+    // single bound variable (`n`) in `Hsucc`.
+
+    // Helper to build a `StatePred` with the loop counter set to `n`:
+    //      { r12 = n }
+    let mk_state_pred = |vars: &mut VarCounter, n: Term| {
+        StatePred {
+            state: symbolic::State {
+                pc: conc_state.pc,
+                regs: array::from_fn(|r| {
+                    let v = vars.fresh();
+                    match r {
+                        12 => n,
+                        _ => v,
+                    }
+                }),
+                mem: MemState::Log(MemLog { l: Vec::new() }),
             },
-            |pf, n| {
-                // Prove the conclusion.
-                //pf.show_context();
+            props: vec![].into(),
+        }
+    };
 
-                // From the premise `n > 0`, we can derive `n != 0`, which is needed to show that
-                // the jump is taken.
-                //
-                // We do this part early because the last lemma proved within this closure becomes
-                // the conclusion of the `forall`.
-                pf.rule_gt_ne_unsigned(n.clone(), 0.into())?;
+    // Helper to build the `Prop::Reachable` for a given `n` and cycle count `c`:
+    //      reach(c, { r12 = n })
+    let mk_prop_reach = |n: Term, c: Term| {
+        Prop::Reachable(ReachableProp {
+            pred: Binder::new(|vars| mk_state_pred(vars, n.shift())),
+            min_cycles: c,
+        })
+    };
 
-                // Set up the initial state.
-                let l = pf.rule_step_zero(|vars| {
-                    // `rule_step_zero` introduces a binder (the existential built into the
-                    // `StepProp`), so we need to shift `n` from the outer context to make it valid
-                    // under the binder.
+    eprintln!("\nprove p_loop");
+    let p_loop = pf.tactic_induction(
+        Prop::Forall(Binder::new(|vars| {
+            let n = vars.fresh();
+            let p = Prop::Nonzero(Term::cmpa(1000.into(), n));
+            let q = Prop::Forall(Binder::new(|vars| {
+                let n = n.shift();
+                let b = vars.fresh();
+                let p = mk_prop_reach(n, b);
+                let q = mk_prop_reach(0.into(), Term::add(b, Term::mull(n, 13.into())));
+                (vec![p].into(), Box::new(q))
+            }));
+            (vec![p].into(), Box::new(q))
+        })),
+        |pf| {
+            //pf.show_context();
+            pf.tactic_forall_intro(
+                |vars| {
+                    let b = vars.fresh();
+                    let p = mk_prop_reach(0.into(), b);
+                    (vec![p], b)
+                },
+                |_pf, _b| {
+                    // No-op.  The conclusion for the zero case is the same as the last premise.
+                },
+            );
+        },
+        |pf, n| {
+            pf.tactic_forall_intro(
+                |vars| {
                     let n = n.shift();
-                    StatePred {
-                        state: symbolic::State {
-                            pc: conc_state.pc,
-                            regs: array::from_fn(|r| {
-                                // We unconditionally allocate a var for each reg so that almost
-                                // all registers will be set to the same-numbered var: `rN = xN`.
-                                let v = vars.fresh();
-                                match r {
-                                    12 => n.clone(),
-                                    _ => v,
-                                }
-                            }),
-                            // Memory in the initial state is an empty `MemLog`, which implies that
-                            // nothing is known about memory.
-                            mem: MemState::Log(MemLog::new()),
-                        },
-                        props: vec![],
-                    }
-                });
+                    let b = vars.fresh();
+                    let p = mk_prop_reach(Term::add(n, 1.into()), b);
+                    (vec![p], b)
+                },
+                |pf, b| {
+                    let n = n.shift();
+                    let n_plus_1 = Term::add(n, 1.into());
+                    //pf.show_context();
 
-                pf.rule_step_extend(l, |spf| {
-                    // Symbolic execution through one iteration of the loop.
-                    spf.tactic_run();
-                    spf.rule_step_jump(true)?;
-                    spf.tactic_run();
-                    spf.rule_step_load_fresh()?;
-                    spf.tactic_run_until(conc_state.pc)?;
+                    let p_iter = pf.tactic_clone(p_iter);
+                    let _p_first = pf.tactic_apply(p_iter, &[b, n_plus_1]);
 
-                    // Erase information about memory and certain registers to make it easier to
-                    // sequence this `StepProp` with itself.
-                    for &r in &[11, 13, 14, 15, 32] {
-                        spf.rule_forget_reg(r);
-                    }
-                    spf.rule_forget_mem();
-                    Ok(())
-                })?;
-                Ok(())
-            },
-        )?;
+                    pf.tactic_admit(Prop::Nonzero(Term::cmpa(1000.into(), n)));
+                    let p_ind = pf.tactic_clone((1, 1));
+                    let p_rest = pf.tactic_apply0(p_ind);
 
-        // ----------------------------------------
-        // Prove the full loop by induction
-        // ----------------------------------------
+                    let expected_cycles =
+                        Term::add(b, Term::add(Term::mull(n, 13.into()), 13.into()));
+                    pf.tactic_admit(Prop::Nonzero(Term::cmpe(
+                        Term::add(Term::add(b, 13.into()), Term::mull(n, 13.into())),
+                        expected_cycles,
+                    )));
+                    let p_final = pf.tactic_apply(p_rest, &[Term::add(b, 13.into())]);
+                    pf.tactic_reach_shrink(p_final, expected_cycles);
+                },
+            );
+        },
+    );
+    //pf.show_context();
 
-        // Helper to build the initial state with the loop counter set to `n`:
-        //      { r12 = n }
-        let p_pre_state = |vars: &mut VarCounter, n: Term| {
+
+    // ----------------------------------------
+    // Prove the full execution
+    // ----------------------------------------
+
+    eprintln!("\nprove p_exec");
+    // `conc_state` is reachable.
+    let p_conc = pf.tactic_admit(Prop::Reachable(ReachableProp {
+        pred: Binder::new(|_vars| {
             StatePred {
                 state: symbolic::State {
                     pc: conc_state.pc,
-                    regs: array::from_fn(|r| {
-                        let v = vars.fresh();
-                        match r {
-                            12 => n.clone(),
-                            _ => v,
-                        }
-                    }),
-                    mem: MemState::Log(MemLog { l: Vec::new() }),
+                    regs: conc_state.regs.map(|x| x.into()),
+                    mem: MemState::Log(MemLog::new()),
                 },
-                props: vec![],
+                props: Box::new([]),
             }
-        };
-        // Helper to build the statement that running with the loop counter set to `n` runs for
-        // `13*n` steps and reduces the counter to zero:
-        //      { r12 = n } ->(13*n) { r12 = 0 }
-        let p_step = |n: Term| {
-            let pre = Binder::new(|vars| p_pre_state(vars, n.shift()));
-            let mut post = pre.clone();
-            post.inner.state.regs[12] = Term::const_(0);
-            Prop::Step(StepProp {
-                pre,
-                post,
-                min_cycles: Term::mull(n.clone(), 13.into()),
-            })
-        };
-        // Helper to build the complete statement we're trying to prove:
-        //      forall n, n < 1000 -> { r12 = n } ->(13*n) { r12 = 0 }
-        let p = |n: Term| {
-            Prop::Forall(Binder::new(|_| {
-                let step = p_step(n.shift());
-                (vec![Prop::Nonzero(Term::cmpa(1000.into(), n.shift()))], Box::new(step))
-            }))
-        };
+        }),
+        min_cycles: conc_state.cycle.into(),
+    }));
 
-        // Premise that no overflow occurred: `n + 1 > 0`.  This is part of the inductive case
-        // passed to `rule_induction`.
-        let no_overflow = |n: Term| {
-            Prop::Nonzero(Term::cmpa(Term::add(n, 1.into()), 0.into()))
-        };
+    // Modify `p_conc` to match the premise of `p_loop`.
+    pf.tactic_reach_extend(p_conc, |rpf| {
+        for r in 0 .. 33 {
+            if r == 12 {
+                // Pad out the variable numbering to align with p_loop.
+                rpf.rule_var_fresh();
+            } else {
+                rpf.rule_forget_reg(r);
+            }
+        }
+    });
 
-        // Prove the base case:
-        //      (0 + 1 > 0) -> { r12 = 0 } ->(0) { r12 = 0 }
-        //
-        // The premise `0 + 1 > 0` normalizes to `1` (true), but it still needs to be present so
-        // the lemma matches `p(0)` as expected by `rule_induction`.
-        eprintln!("\nprove Hzero");
-        let l_zero = pf.tactic_implies_intro(vec![no_overflow(0.into())], |pf| {
-            pf.rule_step_zero(|vars| {
-                p_pre_state(vars, 0.into())
-            });
-            Ok(())
-        })?;
+    // Combine `p_conc` and `p_loop` to prove that the loop's final state is reachable.
+    let p_loop_n = pf.tactic_apply(p_loop, &[conc_state.regs[12].into()]);
+    pf.rule_trivial();
+    let p_loop_n = pf.tactic_apply0(p_loop_n);
+    let p_exec = pf.tactic_apply(p_loop_n, &[conc_state.cycle.into()]);
 
-        // Prove the inductive case:
-        //      forall n,
-        //      n + 1 > 0 ->
-        //      (n < 1000 -> { r12 = n } ->(13*n) { r12 = 0 }) ->
-        //      (n + 1 < 1000 -> { r12 = n + 1 } ->(13*(n+1)) { r12 = 0 })
-        //
-        // Note: currently `Prop::Forall` doesn't get normalized in any way, so `a -> (b -> c)` (a
-        // `Forall` with one premise, whose conclusion is a `Forall` with one premise) is not
-        // considered equivalent to `a -> b -> c` (a `Forall` with two premises).
-        eprintln!("\nprove Hsucc");
-        let l_succ = pf.rule_forall_intro(
-            |vars| {
-                let n = vars.fresh();
-                (vec![no_overflow(n.clone()), p(n.clone())], n)
-            },
-            |pf, n| {
-                let lt_1000 = Prop::Nonzero(
-                    Term::cmpa(1000.into(), Term::add(n.clone(), 1.into())));
-                pf.tactic_implies_intro(vec![lt_1000], |pf| {
-                    let n = n.shift();
-                    // Currently, we don't have rules to prove this simple arithmetic fact:
-                    //      0 < n + 1 < 1000 -> n < 1000
-                    let l_imp = pf.admit(Prop::implies(vec![
-                        Prop::Nonzero(Term::cmpa(1000.into(), Term::add(n.clone(), 1.into()))),
-                        Prop::Nonzero(Term::cmpa(Term::add(n.clone(), 1.into()), 0.into())),
-                    ], Prop::Nonzero(Term::cmpa(1000.into(), n.clone()))));
-                    pf.tactic_apply0(l_imp)?;
 
-                    let l = pf.rule_shift(1, 1);
-                    let l_n_iters = pf.tactic_apply0(l)?;
+    println!("\nfinal theorem:\n{}", pf.print(&pf.props()[p_exec.1]));
 
-                    let l_iter = pf.rule_shift(0, l_iter);
-                    let l_next_iter = pf.rule_apply(l_iter, &[Term::add(n.clone(), 1.into())])?;
-
-                    //pf.show_context_verbose();
-                    let witness: [_; 33] = array::from_fn(|i| match i {
-                        11 => Term::var_unchecked(VarId::new(0, 34)),
-                        13 => Term::var_unchecked(VarId::new(0, 35)),
-                        14 => Term::var_unchecked(VarId::new(0, 36)),
-                        15 => Term::var_unchecked(VarId::new(0, 37)),
-                        32 => Term::var_unchecked(VarId::new(0, 38)),
-                        _ => Term::var_unchecked(VarId::new(0, i as _)),
-                    });
-                    let _l_n_plus_one_iters = pf.rule_step_seq(l_next_iter, l_n_iters, &witness)?;
-
-                    Ok(())
-                })?;
-                Ok(())
-            },
-        )?;
-
-        eprintln!("\napply induction with {l_zero}, {l_succ}");
-        let _l_iters = pf.rule_induction(l_zero, l_succ)?;
-
-        eprintln!("\nfinal context:");
-        pf.show_context();
-
-        Ok(())
-    })?;
-    eprintln!("ok");
-
+    println!("ok");
     Ok(())
 }
 

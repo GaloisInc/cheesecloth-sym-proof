@@ -7,6 +7,7 @@ use crate::symbolic;
 
 pub mod fold;
 pub mod print;
+pub mod rename_vars;
 pub mod shift;
 pub mod subst;
 pub mod term;
@@ -183,33 +184,9 @@ pub enum Prop {
     /// `t != 0`
     Nonzero(Term),
     /// `forall xs, Ps(xs) -> Q(xs)`
-    Forall(Binder<(Vec<Prop>, Box<Prop>)>),
-    /// ```
-    /// forall s,
-    /// (exists x, pre(s, x)) =>
-    /// (exists s' x' n, post(s', x') /\ s ->n s' /\ n >= N)
-    /// ```
-    Step(StepProp),
+    Forall(Binder<(Box<[Prop]>, Box<Prop>)>),
     /// `exists s x n, pred(s, x) /\ reachable(s, n) /\ n >= min_cycles`
     Reachable(ReachableProp),
-}
-
-/// ```
-/// forall s,
-/// (exists x, pre(s, x)) =>
-/// (exists s' x' n, post(s', x') /\ s ->n s' /\ n >= min_cycles)
-/// ```
-///
-/// `s` and `s'` are not represented specifically; the `forall s` and `exists s'` parts are "built
-/// in" so that we don't need to support arbitrary quantification over states (`Prop::Forall` only
-/// allows quantifying over `Word`s).  `n` also isn't represented explicitly.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct StepProp {
-    pub pre: Binder<StatePred>,
-    pub post: Binder<StatePred>,
-    /// Note `min_cycles` is not under a binder - it must be expressed in terms of variables
-    /// already in scope.
-    pub min_cycles: Term,
 }
 
 /// ```
@@ -228,16 +205,16 @@ pub struct ReachableProp {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct StatePred {
     pub state: symbolic::State,
-    pub props: Vec<Prop>,
+    pub props: Box<[Prop]>,
 }
 
 impl Prop {
-    pub fn implies(premises: Vec<Prop>, conclusion: Prop) -> Prop {
+    pub fn implies(premises: Box<[Prop]>, conclusion: Prop) -> Prop {
         Prop::Forall(Binder::new(|_| (premises.shift(), Box::new(conclusion.shift()))))
     }
 
     pub fn implies1(premise: Prop, conclusion: Prop) -> Prop {
-        Prop::implies(vec![premise], conclusion)
+        Prop::implies(Box::new([premise]), conclusion)
     }
 
     pub fn for_each_var<T>(&self, f: &mut impl FnMut(VarId) -> Option<T>) -> Option<T> {
@@ -245,15 +222,14 @@ impl Prop {
             Prop::Nonzero(ref t) => t.for_each_var(f),
             Prop::Forall(ref b) => {
                 let (ref ps, ref p) = b.inner;
-                for p in ps {
+                for p in ps.iter() {
                     if let Some(x) = p.for_each_var(f) {
                         return Some(x);
                     }
                 }
                 p.for_each_var(f)
             },
-            // TODO: implement these cases?
-            Prop::Step(_) => None,
+            // TODO: implement this case?
             Prop::Reachable(_) => None,
         }
     }

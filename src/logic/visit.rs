@@ -1,4 +1,4 @@
-use super::{VarId, Term, TermKind, Prop, StepProp, ReachableProp, StatePred, Binder};
+use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder};
 
 
 pub trait Visitor {
@@ -69,18 +69,8 @@ impl Visit for Prop {
                     q.visit_with(f);
                 })
             },
-            Prop::Step(ref sp) => sp.visit_with(f),
             Prop::Reachable(ref rp) => rp.visit_with(f),
         }
-    }
-}
-
-impl Visit for StepProp {
-    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
-        let StepProp { ref pre, ref post, min_cycles } = *self;
-        f.visit_binder(pre, |f, sp| sp.visit_with(f));
-        f.visit_binder(post, |f, sp| sp.visit_with(f));
-        min_cycles.visit_with(f);
     }
 }
 
@@ -106,6 +96,14 @@ impl<T: Visit> Visit for Box<T> {
     }
 }
 
+impl<T: Visit> Visit for Box<[T]> {
+    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+        for x in self.iter() {
+            x.visit_with(f);
+        }
+    }
+}
+
 impl<T: Visit> Visit for Vec<T> {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
         for x in self {
@@ -119,5 +117,12 @@ impl<T: Visit, const N: usize> Visit for [T; N] {
         for x in self {
             x.visit_with(f);
         }
+    }
+}
+
+impl<A: Visit, B: Visit> Visit for (A, B) {
+    fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
+        self.0.visit_with(f);
+        self.1.visit_with(f);
     }
 }
