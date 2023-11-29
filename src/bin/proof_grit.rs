@@ -84,24 +84,25 @@ fn run(path: &str) -> Result<(), String> {
                 Prop::Reachable(ReachableProp {
                     pred: Binder::new(|vars| {
                         let n = n.shift();
+                        let regs = array::from_fn(|r| {
+                            // We unconditionally allocate a var for each reg so that
+                            // almost all registers will be set to the same-numbered var:
+                            // `rN = xN`.
+                            let v = vars.fresh();
+                            match r {
+                                12 => n.clone(),
+                                _ => v,
+                            }
+                        });
                         StatePred {
-                            state: symbolic::State {
-                                pc: conc_state.pc,
-                                regs: array::from_fn(|r| {
-                                    // We unconditionally allocate a var for each reg so that
-                                    // almost all registers will be set to the same-numbered var:
-                                    // `rN = xN`.
-                                    let v = vars.fresh();
-                                    match r {
-                                        12 => n.clone(),
-                                        _ => v,
-                                    }
-                                }),
+                            state: symbolic::State::new (
+                                conc_state.pc,
+                                regs,
                                 // Memory in the initial state is an empty `MemLog`, which implies
                                 // that nothing is known about memory.
-                                mem: MemState::Log(MemLog::new()),
-                                conc_st: Some (conc_state.clone()),
-                            },
+                                MemState::Log(MemLog::new()),
+                                Some (conc_state.clone()),
+                            ),
                             props: vec![].into(),
                         }
                     }),
@@ -181,19 +182,20 @@ fn run(path: &str) -> Result<(), String> {
     // Helper to build a `StatePred` with the loop counter set to `n`:
     //      { r12 = n }
     let mk_state_pred = |vars: &mut VarCounter, n: Term| {
+        let regs = array::from_fn(|r| {
+            let v = vars.fresh();
+            match r {
+                12 => n,
+                _ => v,
+            }
+        });
         StatePred {
-            state: symbolic::State {
-                pc: conc_state.pc,
-                regs: array::from_fn(|r| {
-                    let v = vars.fresh();
-                    match r {
-                        12 => n,
-                        _ => v,
-                    }
-                }),
-                mem: MemState::Log(MemLog { l: Vec::new() }),
-                conc_st: Some (conc_state.clone()),
-            },
+            state: symbolic::State::new (
+                conc_state.pc,
+                regs,
+                MemState::Log(MemLog { l: Vec::new() }),
+                Some (conc_state.clone()),
+            ),
             props: vec![].into(),
         }
     };
@@ -278,12 +280,12 @@ fn run(path: &str) -> Result<(), String> {
     let p_conc = pf.tactic_admit(Prop::Reachable(ReachableProp {
         pred: Binder::new(|_vars| {
             StatePred {
-                state: symbolic::State {
-                    pc: conc_state.pc,
-                    regs: conc_state.regs.map(|x| x.into()),
-                    mem: MemState::Log(MemLog::new()),
-                    conc_st: Some (conc_state.clone()),
-                },
+                state: symbolic::State::new(
+                    conc_state.pc,
+                    conc_state.regs.map(|x| x.into()),
+                    MemState::Log(MemLog::new()),
+                    Some (conc_state.clone()),
+                ),
                 props: Box::new([]),
             }
         }),

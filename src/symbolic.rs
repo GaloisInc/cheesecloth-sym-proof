@@ -434,6 +434,10 @@ pub struct State {
     pub pc: Word,
     pub regs: [Term; NUM_REGS],
     pub mem: MemState,
+    
+    // For debugging, mantain a concrete state to check the cymbolic
+    // execution
+    #[cfg(feature = "debug_symbolic")]
     pub conc_st: Option<micro_ram::State>,
 }
 
@@ -453,7 +457,11 @@ impl State {
         mem: MemState,
         conc_st: Option<micro_ram::State>,
     ) -> State {
-        State { pc, regs, mem, conc_st}
+        State { pc,
+                regs,
+                mem,
+                #[cfg(feature = "debug_symbolic")]
+                conc_st}
     }
 
     pub fn pc(&self) -> Word {
@@ -486,12 +494,14 @@ impl State {
 
     // Step the concrete state
     pub fn conc_step(&mut self, instr: Instr, advice: Option<Word>) -> () {
+        #[cfg(feature = "debug_symbolic")]
         if let Some(ref mut conc_state) = self.conc_st {
             conc_state.step(instr, advice);
             self.validate().unwrap();
         }
     }
     
+    #[cfg(feature = "debug_symbolic")]
     pub fn conc_pc(&self) -> Option <Addr> {
         self.conc_st.as_ref().map(|st| st.pc).clone()
     }
@@ -499,7 +509,9 @@ impl State {
     // Validate the symbolic state, as a predicate, over the concrete
     // state conc_st, which should be executed in parallel to the
     // symbolic state.
+    #[cfg(feature = "debug_symbolic")]
     pub fn validate(&self) -> Result<(), String> {
+        #[cfg(feature = "debug_symbolic")]
         match &self.conc_st
         {
             Some (cst) => self.validate_conc_state(cst),
@@ -509,6 +521,7 @@ impl State {
 
     // Validate the symbolic state, as a predicate, over some provided
     // concrete state
+    #[cfg(feature = "debug_symbolic")]
     pub fn validate_conc_state(&self, conc_st: &micro_ram::State) -> Result<(), String> {
         self.validate_pc(&conc_st.pc)?;
         self.validate_regs(&conc_st.regs)?;
@@ -518,14 +531,18 @@ impl State {
         }
         return Ok(())
     }
+    
+    #[cfg(feature = "debug_symbolic")]
     fn validate_pc(&self, conc_pc: &Addr) -> Result<(), String> {
         if self.pc != *conc_pc{
             return Err(format!("Pc's don't match. Symbolic {} != Concrete {}", self.pc, conc_pc));
         }
         return Ok(())
     }
+    
     // For now, it only checks one thing:
-    // 1. Concrete Terms match and 
+    // 1. Concrete Terms match
+    #[cfg(feature = "debug_symbolic")]
     fn validate_regs(&self, conc_regs: &[Word; NUM_REGS]) -> Result<(), String> {
         for (i, reg) in self.regs.iter().enumerate() {
             let conc_reg = conc_regs[i];
@@ -541,6 +558,9 @@ impl State {
         }
         return Ok(())
     }
+
+    
+    #[cfg(feature = "debug_symbolic")]
     fn validate_mem(&self, conc_mem: &HashMap<u64, u64>) -> Result<(), String> {
         // Not yet implemented
         return Ok(())
@@ -594,7 +614,12 @@ impl State {
 
 impl Visit for State {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
-        let State { pc: _, ref regs, ref mem, conc_st: _ } = *self;
+        let State { pc: _,
+                    ref regs,
+                    ref mem,
+                    #[cfg(feature = "debug_symbolic")]
+                    conc_st: _,
+        } = *self;
         regs.visit_with(f);
         mem.visit_with(f);
     }
@@ -602,11 +627,17 @@ impl Visit for State {
 
 impl Fold for State {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
-        let State { pc, ref regs, ref mem, conc_st: _ } = *self;
+        let State { pc,
+                    ref regs,
+                    ref mem,
+                    #[cfg(feature = "debug_symbolic")]
+                    conc_st: _,
+        } = *self;
         State {
             pc,
             regs: regs.fold_with(f),
             mem: mem.fold_with(f),
+            #[cfg(feature = "debug_symbolic")]
             conc_st: None, // Should we fold through it?
         }
     }

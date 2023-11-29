@@ -647,6 +647,10 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     fn finish_instr_jump(&mut self, pc: Addr) {
         self.state.pc = pc;
         self.cycles += 1;
+
+        // Execute one step with the concrete state and validate the
+        // symbolic state with it
+        #[cfg(feature = "debug_symbolic")]
         self.conc_step();
     }
 
@@ -654,6 +658,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         self.pf.cur.vars.fresh()
     }
 
+    #[cfg(feature = "debug_symbolic")]
     fn conc_step(&mut self) {
         // We shouldn't have advice in proofs.
         // Advice should be handled explicitely.
