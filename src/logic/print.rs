@@ -1,8 +1,8 @@
 use core::fmt;
 use alloc::boxed::Box;
+use alloc::collections::BTreeSet;
+use alloc::rc::Rc;
 use alloc::vec::Vec;
-use std::collections::HashSet;
-use std::rc::Rc;
 use crate::{BinOp, Addr};
 use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder, VarCounter};
 use crate::symbolic::{MemState, MemConcrete, MemMap, MemSnapshot, MemLog, MemMulti};
@@ -220,7 +220,7 @@ impl Print for StatePred {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "pc = {}", self.state.pc)?;
 
-        let mut vars_mentioned_in_props = HashSet::new();
+        let mut vars_mentioned_in_props = BTreeSet::new();
         for p in self.props.iter() {
             p.for_each_var(&mut |v| -> Option<()> {
                 vars_mentioned_in_props.insert(v);

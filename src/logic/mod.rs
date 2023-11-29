@@ -21,7 +21,7 @@ pub mod wf;
 pub use self::term::{Term, TermKind};
 
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct VarId(u32);
 
 impl VarId {

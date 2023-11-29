@@ -1,14 +1,14 @@
 use core::fmt::Display;
+use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use std::collections::HashSet;
 use crate::logic::{VarId, Binder};
 use crate::logic::print::{Print, Printer, DisplayWithPrinter};
 use crate::logic::visit::{self, Visit, Visitor};
 
 pub struct CheckWfVisitor {
     num_vars: Vec<usize>,
-    vars_reported: HashSet<VarId>,
+    vars_reported: BTreeSet<VarId>,
     errs: Vec<String>,
 }
 
@@ -16,7 +16,7 @@ impl CheckWfVisitor {
     pub fn new(num_vars: Vec<usize>) -> CheckWfVisitor {
         CheckWfVisitor {
             num_vars,
-            vars_reported: HashSet::new(),
+            vars_reported: BTreeSet::new(),
             errs: Vec::new(),
         }
     }
