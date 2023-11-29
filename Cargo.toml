@@ -98,6 +98,10 @@ playback_linear = []
 name = "proof_sqrt"
 required-features = ["debug_symbolic"]
 
+[[bin]]
+name = "interp_grit_microram"
+required-features = ["microram"]
+
 [profile.dev]
 opt-level = 1
 debug = 2
