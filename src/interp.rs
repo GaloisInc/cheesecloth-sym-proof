@@ -1,3 +1,4 @@
+use crate::Addr;
 use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 use crate::kernel::{Proof, ReachProof, PropId};
 use crate::logic::{Prop, Term, VarCounter};
@@ -31,7 +32,9 @@ define_numbered_enum! {
         StepLoadFresh,
         RewriteReg,
         ForgetReg,
-        ForgetMem,
+        MemAbsConcrete,
+        MemAbsMap,
+        MemAbsLog,
     }
 }
 
@@ -151,8 +154,17 @@ pub fn playback_reach_proof(rpf: &mut ReachProof, ps: impl PlaybackStreamTag) {
                 let reg = ps.playback::<Reg>();
                 rpf.rule_forget_reg(reg);
             },
-            ReachRule::ForgetMem => {
-                rpf.rule_forget_mem();
+            ReachRule::MemAbsConcrete => {
+                let addrs = ps.playback::<Vec<Addr>>();
+                rpf.rule_mem_abs_concrete(&addrs);
+            },
+            ReachRule::MemAbsMap => {
+                let addrs = ps.playback::<Vec<Addr>>();
+                rpf.rule_mem_abs_map(&addrs);
+            },
+            ReachRule::MemAbsLog => {
+                let addrs = ps.playback::<Vec<Addr>>();
+                rpf.rule_mem_abs_log(&addrs);
             },
         }
     }

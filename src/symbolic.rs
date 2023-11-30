@@ -160,6 +160,12 @@ impl Memory for MemConcrete {
     }
 }
 
+impl MemConcrete {
+    pub fn new() -> MemConcrete {
+        MemConcrete { m: HashMap::new() }
+    }
+}
+
 impl Visit for MemConcrete {
     fn visit_with<F: Visitor + ?Sized>(&self, _f: &mut F) {
         let MemConcrete { m: _ } = *self;
@@ -215,6 +221,10 @@ impl Memory for MemMap {
 }
 
 impl MemMap {
+    pub fn new() -> MemMap {
+        MemMap { m: AMap::new() }
+    }
+
     pub fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
         for offset in 0 .. w.bytes() {
             self.m.insert(addr + offset, (val.clone(), offset as u8));
