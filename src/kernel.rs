@@ -668,6 +668,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         self.state.pc
     }
 
+    #[cfg(feature = "debug_symbolic")]
     pub fn print_conc_st(&self) {
         eprintln!("CONCRETE REGS: {:?}",self.state.conc_st.clone().map(|st| st.regs));
     }
