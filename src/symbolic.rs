@@ -146,16 +146,25 @@ impl Memory for MemMap {
     fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), String> {
         let addr = addr.as_const_or_err()
             .map_err(|e| format!("when evaluating addr: {e}"))?;
+        self.store_concrete(w, addr, val)
+    }
+
+    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
+        let addr = addr.as_const_or_err()
+            .map_err(|e| format!("when evaluating addr: {e}"))?;
+        self.load_concrete(w, addr)
+    }
+}
+
+impl MemMap {
+    pub fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
         for offset in 0 .. w.bytes() {
             self.m.insert(addr + offset, (val.clone(), offset as u8));
         }
         Ok(())
     }
 
-    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
-        let addr = addr.as_const_or_err()
-            .map_err(|e| format!("when evaluating addr: {e}"))?;
-
+    pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
         // We currently require the load to match a store exactly, so each consecutive address must
         // contain the next consecutive byte in order (starting from zero), and all bytes should be
         // extracted from the same expression.
@@ -235,12 +244,25 @@ pub struct MemSnapshot {
 }
 
 impl Memory for MemSnapshot {
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), String> {
-        let _ = (w, addr, val);
-        todo!("MemSnapshot NYI")
+    fn store(
+        &mut self,
+        _w: MemWidth,
+        _addr: Term,
+        _val: Term,
+        _props: &[Prop],
+    ) -> Result<(), String> {
+        panic!("can't store to MemSnapshot");
     }
     fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
-        let _ = (w, addr);
+        let addr = addr.as_const_or_err()
+            .map_err(|e| format!("when evaluating addr: {e}"))?;
+        let val = self.load_concrete(w, addr)?;
+        Ok(Term::const_(val))
+    }
+}
+
+impl MemSnapshot {
+    pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Word, String> {
         todo!("MemSnapshot NYI")
     }
 }
