@@ -197,15 +197,6 @@ pub struct MemMap {
     pub m: AMap<Addr, (Term, u8)>,
 }
 
-impl MemMap {
-    pub fn new(max: Addr) -> MemMap {
-        MemMap {
-            m: HashMap::new(),
-	    max: max,
-        }
-    }
-}
-
 impl Memory for MemMap {
     fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), String> {
         let addr = addr.as_const_or_err()
