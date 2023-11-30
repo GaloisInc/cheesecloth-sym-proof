@@ -156,7 +156,7 @@ fn run(path: &str) -> Result<(), String> {
     }
     
     let mut init_mem_map  = |i| {
-	let mut init_mem_map0 = MemMap::new(iMAX);
+	let mut init_mem_map0 = MemMap::new();
 	for &(addr, ww, pc) in load_mem.iter(){
 	    let val = mem_load(&conc_state.mem, ww, addr);
 	    init_mem_map0.store(ww, Term::const_(addr), Term::const_(val), &[]).ok();

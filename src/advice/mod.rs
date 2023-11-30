@@ -773,7 +773,10 @@ impl Playback for StatePred {
 impl Record for symbolic::State {
     fn record_into(&self, _rs: impl RecordingStreamTag) {
         let rs = recording::states::Tag;
-        let symbolic::State { pc, ref regs, ref mem } = *self;
+        let symbolic::State {
+            pc, ref regs, ref mem,
+            #[cfg(feature = "debug_symbolic")] conc_st: _,
+        } = *self;
         rs.record(&pc);
         rs.record(regs);
         rs.record(mem);
@@ -786,7 +789,10 @@ impl Playback for symbolic::State {
         let pc = ps.playback::<Word>();
         let regs = ps.playback();
         let mem = ps.playback::<MemState>();
-        symbolic::State { pc, regs, mem }
+        symbolic::State {
+            pc, regs, mem,
+            #[cfg(feature = "debug_symbolic")] conc_st: None,
+        }
     }
 }
 

@@ -863,7 +863,10 @@ impl Fold for State {
 
 impl EqShifted for State {
     fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
-        let State { pc, ref regs, ref mem } = *self;
+        let State {
+            pc, ref regs, ref mem,
+            #[cfg(feature = "debug_symbolic")] conc_st: _,
+        } = *self;
         pc.eq_shifted(&other.pc, amount)
             && regs.eq_shifted(&other.regs, amount)
             && mem.eq_shifted(&other.mem, amount)
