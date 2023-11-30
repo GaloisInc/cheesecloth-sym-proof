@@ -240,10 +240,19 @@ fn run(path: &str) -> Result<(), String> {
 	    let i_gt_1 = (1,0);
 	    let i1_bound = (1,1);
 	    
-	    println!("==== ADMIT: \n\t i > 1 -> ((1 == i) == 0)");
-	    pf.show_prop(i_gt_1);
-	    let _i_not_0 = pf.tactic_admit(
-		Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), i.clone()), 0.into())));
+	    println!("==== ADMIT: \n\t forall i, i > 1 -> ((1 == i) == 0)");
+	    // pf.show_prop(i_gt_1);
+
+	    let admit1 = pf.tactic_admit(
+		Prop::Forall(
+		    Binder::new(|vars| {
+			let n = vars.fresh();
+			let p = Prop::Nonzero(Term::cmpa(i.clone(), 0.into()));
+			let q = Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), i.clone()), 0.into()));
+			(vec![p].into(), Box::new(q))
+		    })
+		));
+	    let _i_not_0 = pf.tactic_apply(admit1, &[i]);
 	    // i > 1 ->  MAX > i+1 ->  ((1 == (i + 1)) == 0)
 	    println!("==== ADMIT: \n\t i > 1 ->  MAX > i+1 -> -> ((1 == (i + 1)) == 0)");
 	    pf.show_prop(i_gt_1);
