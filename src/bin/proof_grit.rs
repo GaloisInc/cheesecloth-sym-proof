@@ -20,7 +20,7 @@ use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred}
 use sym_proof::logic::shift::ShiftExt;
 use sym_proof::micro_ram::Program;
 use sym_proof::micro_ram::import;
-use sym_proof::symbolic::{self, MemState, MemLog};
+use sym_proof::symbolic::{self, MemState, MemSnapshot, MemLog};
 use sym_proof::tactics::{Tactics, ReachTactics};
 
 fn run(path: &str) -> Result<(), String> {
@@ -64,6 +64,38 @@ fn run(path: &str) -> Result<(), String> {
     // Set up the proof state
     // ----------------------------------------
     let mut pf = Proof::new(prog);
+
+    MemSnapshot::init_data(conc_state.mem.clone());
+
+    // `conc_state` is reachable.
+    let p_conc = pf.tactic_admit(Prop::Reachable(ReachableProp {
+        pred: Binder::new(|_vars| {
+            StatePred {
+                state: symbolic::State::new(
+                    conc_state.pc,
+                    conc_state.regs.map(|x| x.into()),
+                    MemState::Snapshot(MemSnapshot { base: 0 }),
+                    Some(conc_state.clone()),
+                ),
+                props: Box::new([]),
+            }
+        }),
+        min_cycles: conc_state.cycle.into(),
+    }));
+
+    // Modify `p_conc` to match the premise of `p_loop`.
+    pf.tactic_reach_extend(p_conc, |rpf| {
+        for r in 0 .. 33 {
+            if r == 12 {
+                // Pad out the variable numbering to align with p_loop.
+                rpf.rule_var_fresh();
+            } else {
+                rpf.rule_forget_reg(r);
+            }
+        }
+
+        rpf.rule_mem_abs_log(&[]);
+    });
 
 
     // ----------------------------------------
@@ -144,7 +176,7 @@ fn run(path: &str) -> Result<(), String> {
                 for &r in &[11, 13, 14, 15, 32] {
                     rpf.rule_forget_reg(r);
                 }
-                rpf.rule_forget_mem();
+                rpf.rule_mem_abs_log(&[]);
 
                 //rpf.show_state();
             });
@@ -192,11 +224,11 @@ fn run(path: &str) -> Result<(), String> {
             }
         });
         StatePred {
-            state: symbolic::State::new (
+            state: symbolic::State::new(
                 conc_state.pc,
                 regs,
-                MemState::Log(MemLog { l: Vec::new().into() }),
-                Some (conc_state.clone()),
+                MemState::Log(MemLog::new()),
+                Some(conc_state.clone()),
             ),
             props: vec![].into(),
         }
@@ -278,33 +310,6 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
 
     eprintln!("\nprove p_exec");
-    // `conc_state` is reachable.
-    let p_conc = pf.tactic_admit(Prop::Reachable(ReachableProp {
-        pred: Binder::new(|_vars| {
-            StatePred {
-                state: symbolic::State::new(
-                    conc_state.pc,
-                    conc_state.regs.map(|x| x.into()),
-                    MemState::Log(MemLog::new()),
-                    Some (conc_state.clone()),
-                ),
-                props: Box::new([]),
-            }
-        }),
-        min_cycles: conc_state.cycle.into(),
-    }));
-
-    // Modify `p_conc` to match the premise of `p_loop`.
-    pf.tactic_reach_extend(p_conc, |rpf| {
-        for r in 0 .. 33 {
-            if r == 12 {
-                // Pad out the variable numbering to align with p_loop.
-                rpf.rule_var_fresh();
-            } else {
-                rpf.rule_forget_reg(r);
-            }
-        }
-    });
 
     // Combine `p_conc` and `p_loop` to prove that the loop's final state is reachable.
     let p_loop_n = pf.tactic_apply(p_loop, &[conc_state.regs[12].into()]);
