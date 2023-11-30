@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use crate::{Word, WORD_BYTES, Addr};
 use crate::advice::map::AMap;
@@ -243,6 +244,10 @@ pub struct MemSnapshot {
     pub base: Addr,
 }
 
+thread_local! {
+    static SNAPSHOT_DATA: RefCell<HashMap<Addr, Word>> = RefCell::new(HashMap::new());
+}
+
 impl Memory for MemSnapshot {
     fn store(
         &mut self,
@@ -263,7 +268,15 @@ impl Memory for MemSnapshot {
 
 impl MemSnapshot {
     pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Word, String> {
-        todo!("MemSnapshot NYI")
+        Ok(SNAPSHOT_DATA.with(|c| {
+            micro_ram::mem_load(&c.borrow(), w, self.base + addr)
+        }))
+    }
+
+    pub fn init_data(m: HashMap<Addr, Word>) {
+        SNAPSHOT_DATA.with(|c| {
+            *c.borrow_mut() = m;
+        });
     }
 }
 
