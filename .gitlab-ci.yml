@@ -1,0 +1,27 @@
+image: rust:1.66
+
+default:
+  tags: [stardust]
+
+cache:
+  key: cargo-registry-index
+  paths:
+    - .cargo/registry/index
+    - .cargo/registry/cache
+  policy: pull-push
+
+variables:
+  # Put cargo data in $PWD so it can be referenced by relative path
+  CARGO_HOME: ${CI_PROJECT_DIR}/.cargo
+
+stages:
+  - build
+
+build-and-test:
+  stage: build
+  script:
+    - git config --global credential.helper store
+    - echo "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab-ext.galois.com" > ~/.git-credentials
+    - git clone --recurse-submodules https://gitlab-ext.galois.com/fromager/cheesecloth/witness-checker.git ../witness-checker
+    - cargo check --features verbose
+    - cargo run --features verbose --release --bin proof_grit -- traces/grit.cbor
