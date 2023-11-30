@@ -92,16 +92,12 @@ impl EqShifted for MemState {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemConcrete {
     pub m: HashMap<Addr, Word>,
-    pub max: Addr,
 }
 
 impl Memory for MemConcrete {
     fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), String> {
         let addr = addr.as_const_or_err()
             .map_err(|e| format!("when evaluating addr: {e}"))?;
-        if addr + w.bytes() >= self.max {
-            return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
-        }
         let val = val.as_const_or_err()
             .map_err(|e| format!("in MemConcrete::store: {e}"))?;
         micro_ram::mem_store(&mut self.m, w, addr, val);
@@ -110,9 +106,6 @@ impl Memory for MemConcrete {
     fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
         let addr = addr.as_const_or_err()
             .map_err(|e| format!("when evaluating addr: {e}"))?;
-        if addr + w.bytes() >= self.max {
-            return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
-        }
         let val = micro_ram::mem_load(&self.m, w, addr);
         Ok(Term::const_(val))
     }
@@ -120,26 +113,24 @@ impl Memory for MemConcrete {
 
 impl Visit for MemConcrete {
     fn visit_with<F: Visitor + ?Sized>(&self, _f: &mut F) {
-        let MemConcrete { m: _, max: _ } = *self;
+        let MemConcrete { m: _ } = *self;
     }
 }
 
 impl Fold for MemConcrete {
     fn fold_with<F: Folder + ?Sized>(&self, _f: &mut F) -> Self {
-        let MemConcrete { ref m, max } = *self;
+        let MemConcrete { ref m } = *self;
         // Contains no terms.
         MemConcrete {
             m: m.clone(),
-            max,
         }
     }
 }
 
 impl EqShifted for MemConcrete {
     fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
-        let MemConcrete { ref m, max } = *self;
+        let MemConcrete { ref m } = *self;
         m.eq_shifted(&other.m, amount)
-            && max.eq_shifted(&other.max, amount)
     }
 }
 
@@ -149,16 +140,12 @@ pub struct MemMap {
     /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
     /// `Term`.  The `u8` gives the index of the byte to extract in little-endian order.
     pub m: AMap<Addr, (Term, u8)>,
-    pub max: Addr,
 }
 
 impl Memory for MemMap {
     fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), String> {
         let addr = addr.as_const_or_err()
             .map_err(|e| format!("when evaluating addr: {e}"))?;
-        if addr + w.bytes() >= self.max {
-            return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
-        }
         for offset in 0 .. w.bytes() {
             self.m.insert(addr + offset, (val.clone(), offset as u8));
         }
@@ -168,9 +155,6 @@ impl Memory for MemMap {
     fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
         let addr = addr.as_const_or_err()
             .map_err(|e| format!("when evaluating addr: {e}"))?;
-        if addr + w.bytes() >= self.max {
-            return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
-        }
 
         // We currently require the load to match a store exactly, so each consecutive address must
         // contain the next consecutive byte in order (starting from zero), and all bytes should be
@@ -221,7 +205,7 @@ impl Memory for MemMap {
 
 impl Visit for MemMap {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
-        let MemMap { ref m, max: _ } = *self;
+        let MemMap { ref m } = *self;
         for &(t, _) in m.values() {
             t.visit_with(f);
         }
@@ -230,19 +214,17 @@ impl Visit for MemMap {
 
 impl Fold for MemMap {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
-        let MemMap { ref m, max } = *self;
+        let MemMap { ref m } = *self;
         MemMap {
             m: m.iter().map(|(&a, &(t, b))| (a, (t.fold_with(f), b))).collect(),
-            max,
         }
     }
 }
 
 impl EqShifted for MemMap {
     fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
-        let MemMap { ref m, max } = *self;
+        let MemMap { ref m } = *self;
         m.eq_shifted(&other.m, amount)
-            && max.eq_shifted(&other.max, amount)
     }
 }
 
@@ -265,7 +247,7 @@ impl Memory for MemSnapshot {
 
 impl Visit for MemSnapshot {
     fn visit_with<F: Visitor + ?Sized>(&self, _f: &mut F) {
-        let MemSnapshot { base: _} = *self;
+        let MemSnapshot { base: _ } = *self;
     }
 }
 
