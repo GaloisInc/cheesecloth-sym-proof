@@ -914,15 +914,15 @@ impl Playback for MemMap {
 
 impl Record for MemSnapshot {
     fn record_into(&self, rs: impl RecordingStreamTag) {
-        let _ = rs;
-        todo!()
+        let MemSnapshot { base } = *self;
+        rs.record(&base);
     }
 }
 
 impl Playback for MemSnapshot {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        let _ = ps;
-        todo!()
+        let base = ps.playback();
+        MemSnapshot { base }
     }
 }
 
