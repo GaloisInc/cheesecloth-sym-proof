@@ -19,11 +19,11 @@ use crate::logic::shift::ShiftExt;
 use crate::logic::wf::WfExt;
 use crate::micro_ram::{Instr, Opcode, Reg, Operand, MemWidth, Program};
 use crate::symbolic::{self, Memory, MemState, MemConcrete, MemMap, MemLog};
-#[cfg(any(feature = "recording_rules", feature = "recording_term_index"))]
+#[cfg(feature = "recording_rules")]
 use crate::interp::{Rule, ReachRule};
 
 
-#[cfg(any(feature = "recording_rules", feature = "recording_term_index"))]
+#[cfg(feature = "recording_rules")]
 macro_rules! record {
     ($($x:expr),*) => {{
         use crate::advice::RecordingStreamTag;
@@ -31,7 +31,7 @@ macro_rules! record {
     }};
 }
 
-#[cfg(not(any(feature = "recording_rules", feature = "recording_term_index")))]
+#[cfg(not(feature = "recording_rules"))]
 macro_rules! record {
     ($($x:expr),*) => {{
     }};

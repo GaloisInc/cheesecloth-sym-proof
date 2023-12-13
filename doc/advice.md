@@ -88,17 +88,23 @@ more temporary `Term`s.
 ## `term_index`
 
 This stream represents terms used in rule arguments as indices into
-`term_table`.  Once `term_index` has been recorded, it is used instead of
-`terms` in later stages.  Playing back `term_index` is more efficient than
-playing back `terms` because it only mentions the top-level term, whereas
-`terms` describes every sub-term.
+`term_table`.  This provides the same information as `terms` but is more
+efficient to play back because it only mentions top-level terms, whereas
+`terms` describes every sub-term.  `term_index` is recorded by playing back
+`terms` and recording an index for each top-level `Term` that's played back.
+Once `term_index` has been recorded, it is used instead of `terms` in later
+stages.
 
 Dependencies:
 
+* After `terms`
 * After or at the same time as `term_table`
 
-Since the values in this stream are indices into `term_table`, `term_table`
-must be constructed first.
+`term_index` is built by converting `terms`, so `terms` must be constructed
+first.  Since the values in this stream are indices into `term_table`, each
+`Term` must be present in `term_table` before it can be recorded in
+`term_index` (but it can be added to `term_table` on the fly, allowing
+`term_table` and `term_index` to be recorded in the same stage).
 
 ## `term_intern_index`
 

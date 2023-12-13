@@ -1,4 +1,5 @@
 use core::array;
+use core::cell::Cell;
 use core::convert::{TryFrom, TryInto};
 use core::mem;
 use alloc::boxed::Box;
@@ -37,6 +38,9 @@ impl<T> FakeThreadLocal<T> {
     }
 }
 
+
+#[cfg(not(feature = "microram"))]
+use std::thread_local;
 
 #[cfg(feature = "microram")]
 macro_rules! thread_local {
@@ -685,45 +689,71 @@ impl Record for Term {
         }
 
         #[cfg(feature = "recording_term_index")] {
-            let rs = recording::term_index::Tag;
-            let index = term_table::recording::term_index(*self);
-            rs.put_cast(index);
-            return;
+            // The intended workflow is to run with `recording_terms`, then later run again with
+            // `playback_terms` and `recording_term_index` to convert explicit terms to term
+            // indices.
+            panic!("recording directly into `term_index` is not supported");
         }
     }
+}
+
+thread_local! {
+    static PLAYBACK_TERM_IS_TOP_LEVEL: Cell<bool> = Cell::new(true);
+}
+
+/// Enter playback of a term.  The callback argument is `true` if the term being played back is at
+/// top level, or `false` if we were already in the process of playing back a term.
+#[cfg(feature = "playback_terms")]
+fn playback_enter_term<R>(f: impl FnOnce(bool) -> R) -> R {
+    let is_top_level = PLAYBACK_TERM_IS_TOP_LEVEL.with(|c| c.replace(false));
+    let r = f(is_top_level);
+    PLAYBACK_TERM_IS_TOP_LEVEL.with(|c| c.set(is_top_level));
+    r
 }
 
 impl Playback for Term {
     fn playback_from(_ps: impl PlaybackStreamTag) -> Self {
         #[cfg(feature = "playback_terms")] {
-            let ps = playback::terms::Tag;
-            return match ps.take_bounded(4) {
-                0 => {
-                    let x = ps.playback::<Word>();
-                    Term::const_(x)
-                },
-                1 => {
-                    let v = ps.playback::<VarId>();
-                    Term::var_unchecked(v)
-                },
-                2 => {
-                    let a = ps.playback::<Term>();
-                    Term::not(a)
-                },
-                3 => {
-                    let op = ps.playback::<BinOp>();
-                    let a = ps.playback::<Term>();
-                    let b = ps.playback::<Term>();
-                    Term::binary(op, a, b)
-                },
-                4 => {
-                    let a = ps.playback::<Term>();
-                    let b = ps.playback::<Term>();
-                    let c = ps.playback::<Term>();
-                    Term::mux(a, b, c)
-                },
-                _ => unreachable!(),
-            };
+            return playback_enter_term(|is_top_level| {
+                let ps = playback::terms::Tag;
+                let t = match ps.take_bounded(4) {
+                    0 => {
+                        let x = ps.playback::<Word>();
+                        Term::const_(x)
+                    },
+                    1 => {
+                        let v = ps.playback::<VarId>();
+                        Term::var_unchecked(v)
+                    },
+                    2 => {
+                        let a = ps.playback::<Term>();
+                        Term::not(a)
+                    },
+                    3 => {
+                        let op = ps.playback::<BinOp>();
+                        let a = ps.playback::<Term>();
+                        let b = ps.playback::<Term>();
+                        Term::binary(op, a, b)
+                    },
+                    4 => {
+                        let a = ps.playback::<Term>();
+                        let b = ps.playback::<Term>();
+                        let c = ps.playback::<Term>();
+                        Term::mux(a, b, c)
+                    },
+                    _ => unreachable!(),
+                };
+
+                #[cfg(feature = "recording_term_index")] {
+                    if is_top_level {
+                        let rs = recording::term_index::Tag;
+                        let index = term_table::recording::term_index(t);
+                        rs.put_cast(index);
+                    }
+                }
+
+                t
+            });
         }
 
         #[cfg(feature = "playback_term_index")] {
