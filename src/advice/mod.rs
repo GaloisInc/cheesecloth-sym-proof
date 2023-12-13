@@ -1,3 +1,4 @@
+use core::any;
 use core::array;
 use core::cell::Cell;
 use core::convert::{TryFrom, TryInto};
@@ -6,6 +7,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 #[cfg(not(feature = "microram"))] use std::io::{Read, Write};
 #[cfg(not(feature = "microram"))] use std::panic::{self, UnwindSafe};
+use log::trace;
 use serde_cbor;
 use crate::{Word, BinOp};
 use crate::logic::{Term, VarId, VarCounter, Binder, Prop, ReachableProp, StatePred};
@@ -86,7 +88,10 @@ pub trait RecordingStreamTag: Sized + Copy {
     fn with<R>(self, f: impl FnOnce(&mut RecordingStream) -> R) -> R;
 
     fn put(self, v: Value) {
-        self.with(|rs| rs.put(v))
+        self.with(|rs| {
+            trace!("{}: put {} at index {}", any::type_name::<Self>(), v, rs.buf.len());
+            rs.put(v);
+        })
     }
 
     fn put_cast<T: TryInto<Value>>(self, v: T) {
@@ -318,11 +323,19 @@ pub trait PlaybackStreamTag: Sized + Copy {
     }
 
     fn take(self) -> Value {
-        self.with(|ps| ps.take())
+        self.with(|ps| {
+            let v = ps.take();
+            trace!("{}: take {} from index {}", any::type_name::<Self>(), v, ps.pos - 1);
+            v
+        })
     }
 
     fn take_bounded(self, max: Value) -> Value {
-        self.with(|ps| ps.take_bounded(max))
+        self.with(|ps| {
+            let v = ps.take_bounded(max);
+            trace!("{}: take {} from index {}", any::type_name::<Self>(), v, ps.pos - 1);
+            v
+        })
     }
 
     fn take_cast<T: TryFrom<Value>>(self) -> T {
