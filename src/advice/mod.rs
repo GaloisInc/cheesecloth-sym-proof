@@ -55,6 +55,23 @@ macro_rules! thread_local {
 }
 
 
+thread_local! {
+    static RECORDING_ENABLED: Cell<bool> = Cell::new(true);
+}
+
+/// Temporarily disable recording for the duration of the closure.
+pub fn dont_record<R>(f: impl FnOnce() -> R) -> R {
+    let old = RECORDING_ENABLED.with(|c| c.replace(false));
+    let r = f();
+    RECORDING_ENABLED.with(|c| c.set(old));
+    r
+}
+
+pub fn is_recording() -> bool {
+    RECORDING_ENABLED.with(|c| c.get())
+}
+
+
 pub struct RecordingStream {
     buf: Vec<Value>,
 }
@@ -67,7 +84,9 @@ impl RecordingStream {
     }
 
     pub fn put(&mut self, v: Value) {
-        self.buf.push(v);
+        if is_recording() {
+            self.buf.push(v);
+        }
     }
 
     #[cfg(not(feature = "microram"))]
@@ -151,6 +170,9 @@ macro_rules! recording_stream {
 /// contains `[2]`.
 pub struct ChunkedRecordingStream {
     chunks: Vec<RecordingStream>,
+    /// IDs of chunks that will not be included in the output.  When `add_chunk` is called while
+    /// `!is_recording()`, a chunk is created, but the chunk is also added to this set.
+    omit_chunks: Vec<ChunkId>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -160,12 +182,16 @@ impl ChunkedRecordingStream {
     pub const fn new() -> ChunkedRecordingStream {
         ChunkedRecordingStream {
             chunks: Vec::new(),
+            omit_chunks: Vec::new(),
         }
     }
 
     pub fn add_chunk(&mut self) -> ChunkId {
         let id = ChunkId(self.chunks.len());
         self.chunks.push(RecordingStream::new());
+        if !is_recording() {
+            self.omit_chunks.push(id);
+        }
         id
     }
 
@@ -179,8 +205,11 @@ impl ChunkedRecordingStream {
 
     #[cfg(not(feature = "microram"))]
     pub fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
-        let buf = self.chunks.into_iter()
-            .flat_map(|rs| rs.buf.into_iter())
+        use std::collections::HashSet;
+        let omit = self.omit_chunks.into_iter().collect::<HashSet<_>>();
+        let buf = self.chunks.into_iter().enumerate()
+            .filter(|&(i, _)| !omit.contains(&ChunkId(i)))
+            .flat_map(|(_, rs)| rs.buf.into_iter())
             .collect::<Vec<_>>();
         serde_cbor::to_writer(w, &buf)
     }
