@@ -77,20 +77,31 @@ fn run(path: &str) -> Result<(), String> {
     MemSnapshot::init_data(conc_state.mem.clone());
 
     // `conc_state` is reachable.
-    let p_conc = pf.tactic_admit(Prop::Reachable(ReachableProp {
-        pred: Binder::new(|_vars| {
-            StatePred {
-                state: symbolic::State::new(
-                    conc_state.pc,
-                    conc_state.regs.map(|x| x.into()),
-                    MemState::Snapshot(MemSnapshot { base: 0 }),
-                    Some(conc_state.clone()),
-                ),
-                props: Box::new([]),
-            }
-        }),
-        min_cycles: conc_state.cycle.into(),
-    }));
+    //
+    // We don't record this rule application since it's public, and the code duplicated explicitly
+    // in `interp_grit`.
+    let p_conc = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Reachable(ReachableProp {
+            pred: Binder::new(|_vars| {
+                StatePred {
+                    state: symbolic::State::new(
+                        conc_state.pc,
+                        conc_state.regs.map(|x| x.into()),
+                        MemState::Snapshot(MemSnapshot { base: 0 }),
+                        Some(conc_state.clone()),
+                    ),
+                    props: Box::new([]),
+                }
+            }),
+            min_cycles: conc_state.cycle.into(),
+        }))
+    });
+
+
+    // ----------------------------------------
+    // START OF SECRET PROOF
+    // ----------------------------------------
+
 
     // Modify `p_conc` to match the premise of `p_loop`.
     pf.tactic_reach_extend(p_conc, |rpf| {

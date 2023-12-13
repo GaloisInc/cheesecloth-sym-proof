@@ -16,9 +16,10 @@ use log::trace;
 use sym_proof::advice;
 use sym_proof::interp;
 use sym_proof::kernel::Proof;
+use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred};
 use sym_proof::micro_ram::{self, Program};
 use sym_proof::micro_ram::import;
-use sym_proof::symbolic::MemSnapshot;
+use sym_proof::symbolic::{self, MemState, MemSnapshot};
 use sym_proof::tactics::Tactics;
 
 fn run(path: &str) -> Result<(), String> {
@@ -56,7 +57,26 @@ fn run(path: &str) -> Result<(), String> {
 
     let mut pf = Proof::new(prog);
 
-    // TODO: add initial reach prop to `pf`
+    // `conc_state` is reachable.
+    //
+    // Unlike `interp_grit`, we don't wrap this in `advice::dont_record`.  In `proof_grit`, we want
+    // to avoid recording the rule application.  Here, the rule application has already been
+    // omitted, but we'd like to record any `Term`s, `AVec`s, etc. that may show up during the
+    // application of this rule.
+    pf.rule_admit(Prop::Reachable(ReachableProp {
+        pred: Binder::new(|_vars| {
+            StatePred {
+                state: symbolic::State::new(
+                    conc_state.pc,
+                    conc_state.regs.map(|x| x.into()),
+                    MemState::Snapshot(MemSnapshot { base: 0 }),
+                    Some(conc_state.clone()),
+                ),
+                props: Box::new([]),
+            }
+        }),
+        min_cycles: conc_state.cycle.into(),
+    }));
 
     interp::playback_proof(&mut pf, advice::playback::rules::Tag);
 
