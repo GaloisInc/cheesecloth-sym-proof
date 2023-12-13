@@ -185,3 +185,14 @@ the program trace.
 Dependencies:
 
 * After all other advice streams
+
+## `concrete_state`
+
+This is not a real advice stream.  Instead, it's a snapshot of the program
+state at the end of concrete execution, which lets later stages load the
+concrete state from disk instead of recomputing it in every stage.
+
+The recorded `concrete_state` is not used when running the proof checker in
+zero knowledge.  Instead, the proof checker obtains the concrete state by
+inspecting the state of registers and memory just before the proof checker
+started running.

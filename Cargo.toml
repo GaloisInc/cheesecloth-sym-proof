@@ -25,11 +25,13 @@ microram = ["stage4"]
 deny_warnings = []
 
 stage0 = [
+    "recording_concrete_state",
     "recording_rules",
     "recording_search_index",
     "recording_terms",
 ]
 stage1 = [
+    "playback_concrete_state",
     "playback_rules",
     "playback_search_index",
     "playback_terms",
@@ -39,6 +41,7 @@ stage1 = [
     "recording_amap_keys",
 ]
 stage2 = [
+    "playback_concrete_state",
     "playback_rules",
     "playback_search_index",
     "playback_term_table",
@@ -49,6 +52,7 @@ stage2 = [
     "recording_amap_access",
 ]
 stage3 = [
+    "playback_concrete_state",
     "playback_rules",
     "playback_search_index",
     "playback_term_table",
@@ -60,6 +64,7 @@ stage3 = [
     "recording_linear",
 ]
 stage4 = [
+    "playback_concrete_state",
     "playback_rules",
     "playback_search_index",
     "playback_term_table",
@@ -71,6 +76,8 @@ stage4 = [
     "playback_linear",
 ]
 
+recording_concrete_state = []
+playback_concrete_state = []
 recording_rules = []
 playback_rules = []
 recording_terms = []
@@ -97,6 +104,10 @@ playback_linear = []
 [[bin]]
 name = "proof_sqrt"
 required-features = ["debug_symbolic"]
+
+[[bin]]
+name = "interp_grit"
+required-features = ["playback_concrete_state"]
 
 [[bin]]
 name = "interp_grit_microram"

@@ -1,12 +1,17 @@
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+use serde::{Serialize, Deserialize, Serializer, Deserializer};
+use serde::de;
 use crate::{Word, WORD_BYTES, Addr};
 use crate::micro_ram::{Reg, Operand, Opcode, Instr, MemWidth, NUM_REGS};
 
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct State {
     pub pc: Addr,
     pub cycle: Word,
+    #[serde(serialize_with = "serialize_regs")]
+    #[serde(deserialize_with = "deserialize_regs")]
     pub regs: [Word; NUM_REGS],
     pub mem: BTreeMap<Addr, Word>,
 }
@@ -151,4 +156,25 @@ pub fn mem_load(mem: &BTreeMap<Addr, Word>, w: MemWidth, addr: Addr) -> Word {
         let x = mem.get(&word_addr).copied().unwrap_or(0);
         (x >> offset_bits) & mask
     }
+}
+
+
+fn serialize_regs<S>(regs: &[Word; NUM_REGS], serializer: S) -> Result<S::Ok, S::Error>
+where S: Serializer {
+    let v = regs.iter().copied().collect::<Vec<_>>();
+    v.serialize(serializer)
+}
+
+fn deserialize_regs<'de, D>(deserializer: D) -> Result<[Word; NUM_REGS], D::Error>
+where D: Deserializer<'de> {
+    let v = <Vec<Word>>::deserialize(deserializer)?;
+    if v.len() != NUM_REGS {
+        return Err(de::Error::invalid_length(
+                v.len(), &(&alloc::format!("a list of length {}", NUM_REGS) as &str)));
+    }
+    let mut arr = [0; NUM_REGS];
+    for (x, y) in arr.iter_mut().zip(v.iter()) {
+        *x = *y;
+    }
+    Ok(arr)
 }

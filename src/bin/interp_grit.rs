@@ -16,8 +16,9 @@ use log::trace;
 use sym_proof::advice;
 use sym_proof::interp;
 use sym_proof::kernel::Proof;
-use sym_proof::micro_ram::Program;
+use sym_proof::micro_ram::{self, Program};
 use sym_proof::micro_ram::import;
+use sym_proof::symbolic::MemSnapshot;
 use sym_proof::tactics::Tactics;
 
 fn run(path: &str) -> Result<(), String> {
@@ -30,31 +31,20 @@ fn run(path: &str) -> Result<(), String> {
     eprintln!("loaded memory: {} words", init_state.mem.len());
     trace!("initial regs = {:?}", init_state.regs);
 
-
-    // ----------------------------------------
-    // Run the concrete prefix
-    // ----------------------------------------
-
-    let mut conc_state = init_state;
-    // Run to the start of the first `memcpy`.
-    let memcpy_addr = exec.labels["memcpy#39"];
-    while conc_state.pc != memcpy_addr {
-        let instr = prog[conc_state.pc];
-        conc_state.step(instr, None);
+    // Load the concrete state from disk so we don't need to rerun the concrete prefix.
+    #[cfg(not(feature = "playback_concrete_state"))] {
+        compile_error!("can't run proof interpreter without playback_concrete_state");
     }
-    // Run concretely: 8 steps to the start of the loop, then 11 more steps to run the first
-    // iteration up to the condition check.  The loop is structured as a do/while, so the condition
-    // check comes at the end.
-    for _ in 0 .. 8 + 11 {
-        let instr = prog[conc_state.pc];
-        eprintln!("run concrete [{}]: {:?}", conc_state.pc, instr);
-        conc_state.step(instr, None);
-    }
+    #[cfg(feature = "playback_concrete_state")]
+    let conc_state: micro_ram::State = {
+        use std::fs::File;
+        let mut f = File::open("advice/concrete_state.cbor")
+            .map_err(|e| e.to_string())?;
+        serde_cbor::from_reader(f)
+            .map_err(|e| e.to_string())?
+    };
 
-    eprintln!("concrete registers:");
-    for (i, &x) in conc_state.regs.iter().enumerate() {
-        eprintln!("{:2}: 0x{:x}", i, x);
-    }
+    MemSnapshot::init_data(conc_state.mem.clone());
 
 
     // ----------------------------------------

@@ -59,6 +59,15 @@ fn run(path: &str) -> Result<(), String> {
         eprintln!("{:2}: 0x{:x}", i, x);
     }
 
+    // Record the concrete state so we don't need to rerun the concrete prefix in later stages.
+    #[cfg(feature = "recording_concrete_state")] {
+        use std::fs::File;
+        let mut f = File::create("advice/concrete_state.cbor")
+            .map_err(|e| e.to_string())?;
+        serde_cbor::to_writer(f, &conc_state)
+            .map_err(|e| e.to_string())?;
+    }
+
 
     // ----------------------------------------
     // Set up the proof state
