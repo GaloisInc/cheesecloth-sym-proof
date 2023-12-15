@@ -141,11 +141,17 @@ pub fn mem_store(mem: &mut BTreeMap<Addr, Word>, w: MemWidth, addr: Addr, val: W
 }
 
 pub fn mem_load(mem: &BTreeMap<Addr, Word>, w: MemWidth, addr: Addr) -> Word {
+    mem_load_ex(w, addr, |a| mem.get(&a).copied().unwrap_or(0))
+}
+
+/// Given a function that loads a whole word from an aligned address, perform a load of arbitrary
+/// width from an arbitrary address.
+pub fn mem_load_ex(w: MemWidth, addr: Addr, get_word: impl FnOnce(Addr) -> Word) -> Word {
     let w = w.bytes();
     assert!(addr % w == 0, "misaligned access at address 0x{:x}", addr);
     debug_assert!(w <= WORD_BYTES);
     if w == WORD_BYTES {
-        mem.get(&addr).copied().unwrap_or(0)
+        get_word(addr)
     } else {
         let offset_mask = WORD_BYTES as Addr - 1;
         let word_addr = addr & !offset_mask;
@@ -153,7 +159,7 @@ pub fn mem_load(mem: &BTreeMap<Addr, Word>, w: MemWidth, addr: Addr) -> Word {
         let offset_bits = offset * 8;
 
         let mask = (1 << (8 * w)) - 1;
-        let x = mem.get(&word_addr).copied().unwrap_or(0);
+        let x = get_word(word_addr);
         (x >> offset_bits) & mask
     }
 }

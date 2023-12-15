@@ -439,7 +439,12 @@ impl MemSnapshot {
             }));
         }
         #[cfg(feature = "microram")] {
-            todo!("MemSnapshot NYI on microram")
+            extern "C" {
+                fn cc_load_snapshot_word(addr: u64) -> u64;
+            }
+            return Ok(micro_ram::state::mem_load_ex(w, self.base + addr, |a| {
+                unsafe { cc_load_snapshot_word(a) }
+            }));
         }
     }
 

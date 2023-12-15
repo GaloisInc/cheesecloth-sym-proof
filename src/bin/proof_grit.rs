@@ -18,7 +18,7 @@ use sym_proof::advice;
 use sym_proof::kernel::Proof;
 use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred};
 use sym_proof::logic::shift::ShiftExt;
-use sym_proof::micro_ram::Program;
+use sym_proof::micro_ram::{Program, MemWidth};
 use sym_proof::micro_ram::import;
 use sym_proof::symbolic::{self, MemState, MemSnapshot, MemLog};
 use sym_proof::tactics::{Tactics, ReachTactics};
@@ -114,6 +114,9 @@ fn run(path: &str) -> Result<(), String> {
             }
         }
 
+        // For testing purposes, apply a `mem_abs` rule that actually reads from the concrete
+        // state's memory.
+        rpf.rule_mem_abs_map(&[(8, MemWidth::WORD)]);
         rpf.rule_mem_abs_log(&[]);
     });
 

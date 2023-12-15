@@ -11,12 +11,13 @@
 #![deny(unused_must_use)]
 #![cfg_attr(feature = "deny_warnings", deny(warnings))]
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::env;
 use std::fs::File;
 use env_logger;
 use log::trace;
 use serde_cbor;
-use sym_proof::Word;
+use sym_proof::{Addr, Word};
 use sym_proof::advice;
 use sym_proof::interp;
 use sym_proof::kernel::Proof;
@@ -40,7 +41,11 @@ static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
     regs: [0; NUM_REGS],
 };
 
-unsafe fn load_snapshot_cpu_state() {
+thread_local! {
+    static SNAPSHOT_MEM: RefCell<BTreeMap<Addr, Word>> = RefCell::new(BTreeMap::new());
+}
+
+unsafe fn load_concrete_state() {
     // Load the concrete state from disk so we don't need to rerun the concrete prefix.
     #[cfg(not(feature = "playback_concrete_state"))] {
         compile_error!("can't run proof interpreter without playback_concrete_state");
@@ -51,6 +56,7 @@ unsafe fn load_snapshot_cpu_state() {
         let mut f = File::open("advice/concrete_state.cbor").unwrap();
         serde_cbor::from_reader(f).unwrap()
     };
+
     unsafe {
         SNAPSHOT_CPU_STATE = CpuState {
             pc: conc_state.pc,
@@ -58,6 +64,17 @@ unsafe fn load_snapshot_cpu_state() {
             regs: conc_state.regs,
         };
     }
+
+    SNAPSHOT_MEM.with(|rc| {
+        *rc.borrow_mut() = conc_state.mem;
+    });
+}
+
+#[no_mangle]
+extern "C" fn cc_load_snapshot_word(addr: u64) -> u64 {
+    SNAPSHOT_MEM.with(|rc| {
+        rc.borrow().get(&addr).copied().unwrap()
+    })
 }
 
 
@@ -106,7 +123,7 @@ fn run() -> Result<(), String> {
 
 fn main() {
     env_logger::init();
-    unsafe { load_snapshot_cpu_state() };
+    unsafe { load_concrete_state() };
     unsafe { load_advice() };
     run().unwrap();
 }
