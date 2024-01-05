@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use crate::{Word, WORD_BYTES, Addr};
+use crate::advice::map::AMap;
+use crate::advice::vec::AVec;
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand, Instr};
 use crate::logic::{Term, VarId, Prop};
+use crate::logic::eq_shifted::EqShifted;
 use crate::logic::fold::{Fold, Folder};
 use crate::logic::print::debug_print;
 use crate::logic::visit::{Visit, Visitor};
@@ -67,6 +70,24 @@ impl Fold for MemState {
     }
 }
 
+impl EqShifted for MemState {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        match (self, other) {
+            (&MemState::Concrete(ref m1), &MemState::Concrete(ref m2)) =>
+                m1.eq_shifted(m2, amount),
+            (&MemState::Map(ref m1), &MemState::Map(ref m2)) =>
+                m1.eq_shifted(m2, amount),
+            (&MemState::Snapshot(ref m1), &MemState::Snapshot(ref m2)) =>
+                m1.eq_shifted(m2, amount),
+            (&MemState::Log(ref m1), &MemState::Log(ref m2)) =>
+                m1.eq_shifted(m2, amount),
+            (&MemState::Multi(ref m1), &MemState::Multi(ref m2)) =>
+                m1.eq_shifted(m2, amount),
+            _ => false,
+        }
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemConcrete {
@@ -114,12 +135,20 @@ impl Fold for MemConcrete {
     }
 }
 
+impl EqShifted for MemConcrete {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let MemConcrete { ref m, max } = *self;
+        m.eq_shifted(&other.m, amount)
+            && max.eq_shifted(&other.max, amount)
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemMap {
     /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
     /// `Term`.  The `u8` gives the index of the byte to extract in little-endian order.
-    pub m: HashMap<Addr, (Term, u8)>,
+    pub m: AMap<Addr, (Term, u8)>,
     pub max: Addr,
 }
 
@@ -209,6 +238,14 @@ impl Fold for MemMap {
     }
 }
 
+impl EqShifted for MemMap {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let MemMap { ref m, max } = *self;
+        m.eq_shifted(&other.m, amount)
+            && max.eq_shifted(&other.max, amount)
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemSnapshot {
@@ -242,16 +279,23 @@ impl Fold for MemSnapshot {
     }
 }
 
+impl EqShifted for MemSnapshot {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let MemSnapshot { base } = *self;
+        base.eq_shifted(&other.base, amount)
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemLog {
-    pub l: Vec<(Term, Term, MemWidth)>,
+    pub l: AVec<(Term, Term, MemWidth)>,
 }
 
 impl MemLog {
     pub fn new() -> MemLog {
         MemLog {
-            l: Vec::new(),
+            l: AVec::new(),
         }
     }
 }
@@ -286,6 +330,13 @@ impl Fold for MemLog {
     }
 }
 
+impl EqShifted for MemLog {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let MemLog { ref l } = *self;
+        l.eq_shifted(&other.l, amount)
+    }
+}
+
 
 /// Multiple disjoint regions of memory, each with a separate `MemState` representation.  Adding a
 /// new region is legal only if it's provably disjoint from all existing regions.
@@ -297,12 +348,12 @@ impl Fold for MemLog {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemMulti {
     /// Memory regions with concrete bounds.  Each entry is `(start, end, mem)`.
-    pub conc: Vec<(u64, u64, MemState)>,
+    pub conc: AVec<(u64, u64, MemState)>,
     /// Memory objects with symbolic addresses but concrete sizes.  Each entry is `(start, len,
     /// mem)`.
-    pub objs: Vec<(VarId, u64, MemState)>,
+    pub objs: AVec<(VarId, u64, MemState)>,
     /// Fully symbolic memory regions.  Each entry is `(start, end, mem)`.
-    pub sym: Vec<(Term, Term, MemState)>,
+    pub sym: AVec<(Term, Term, MemState)>,
 }
 
 enum MemRegionKind {
@@ -416,6 +467,15 @@ impl Fold for MemMulti {
                 (a1.fold_with(f), a2.fold_with(f), m.fold_with(f))
             }).collect(),
         }
+    }
+}
+
+impl EqShifted for MemMulti {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let MemMulti { ref conc, ref objs, ref sym } = *self;
+        conc.eq_shifted(&other.conc, amount)
+            && objs.eq_shifted(&other.objs, amount)
+            && sym.eq_shifted(&other.sym, amount)
     }
 }
 
@@ -640,5 +700,14 @@ impl Fold for State {
             #[cfg(feature = "debug_symbolic")]
             conc_st: None, // Should we fold through it?
         }
+    }
+}
+
+impl EqShifted for State {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        let State { pc, ref regs, ref mem } = *self;
+        pc.eq_shifted(&other.pc, amount)
+            && regs.eq_shifted(&other.regs, amount)
+            && mem.eq_shifted(&other.mem, amount)
     }
 }

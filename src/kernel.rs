@@ -1,10 +1,17 @@
+use std::array;
+use std::borrow::Cow;
 use std::convert::TryFrom;
-use std::fmt::Display;
+use std::fmt::{Display, Write as _};
 use std::iter;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use crate::{Word, Addr};
+use crate::advice;
+use crate::advice::vec::AVec;
+#[allow(unused)] use crate::advice::{PlaybackStreamTag, RecordingStreamTag};
+use crate::interp::{Rule, ReachRule};
 use crate::logic::{Prop, Term, Binder, VarCounter, ReachableProp, StatePred};
+use crate::logic::eq_shifted::EqShifted;
 use crate::logic::print::{Print, Printer, DisplayWithPrinter};
 use crate::logic::rename_vars::RenameVarsExt;
 use crate::logic::shift::ShiftExt;
@@ -13,50 +20,17 @@ use crate::micro_ram::{Instr, Opcode, Reg, Operand, MemWidth, Program};
 use crate::symbolic::{self, Memory, MemState, MemLog};
 
 
-#[cfg(feature = "verbose")]
-macro_rules! die {
-    ($($args:tt)*) => {
-        panic!("proof failed: {}", format_args!($($args)*))
-    };
+#[cfg(any(feature = "recording_rules", feature = "recording_term_index"))]
+macro_rules! record {
+    ($($x:expr),*) => {{
+        $( advice::recording::rules::Tag.record(&$x); )*
+    }};
 }
 
-#[cfg(not(feature = "verbose"))]
-macro_rules! die {
-    ($($args:tt)*) => {
-        {
-            let _ = format_args!($($args)*);
-            panic!("proof failed")
-        }
-    };
-}
-
-// TODO: microram version, which just triggers an assertion fail and doesn't panic
-
-
-macro_rules! require {
-    ($cond:expr) => {
-        require!($cond, stringify!($cond))
-    };
-    ($cond:expr, $($args:tt)*) => {
-        if !$cond {
-            die!($($args)*);
-        }
-    };
-}
-
-macro_rules! require_eq {
-    ($x:expr, $y:expr) => {
-        require!($x == $y)
-    };
-    ($x:expr, $y:expr, $($args:tt)*) => {
-        require!(
-            $x == $y,
-            "{} (when checking {} == {})",
-            format_args!($($args)*),
-            stringify!($x),
-            stringify!($y),
-        )
-    };
+#[cfg(not(any(feature = "recording_rules", feature = "recording_term_index")))]
+macro_rules! record {
+    ($($x:expr),*) => {{
+    }};
 }
 
 
@@ -76,7 +50,7 @@ pub struct Proof<'a> {
     /// but we can't directly refer to `Prop`s established in outer scopes.  To use those `Prop`s,
     /// the proof must first call `rule_shift`, which copies the outer `Prop` into the current
     /// scope and shifts its variables to account for the additional binders.
-    scopes: Vec<Scope>,
+    scopes: AVec<Scope>,
 
     /// The current, innermost scope.
     cur: Scope,
@@ -84,17 +58,17 @@ pub struct Proof<'a> {
 
 pub struct Scope {
     pub vars: VarCounter,
-    pub props: Vec<Prop>,
+    pub props: AVec<Prop>,
 }
 
 impl<'a> Proof<'a> {
     pub fn new(prog: Program<'a>) -> Proof<'a> {
         Proof {
             prog,
-            scopes: Vec::new(),
+            scopes: AVec::new(),
             cur: Scope {
                 vars: VarCounter::new(),
-                props: Vec::new(),
+                props: AVec::new(),
             },
         }
     }
@@ -123,7 +97,7 @@ impl<'a> Proof<'a> {
     pub fn enter<R>(
         &mut self,
         vars: VarCounter,
-        props: Vec<Prop>,
+        props: AVec<Prop>,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.enter_ex(vars, props, f).0
@@ -132,7 +106,7 @@ impl<'a> Proof<'a> {
     fn enter_ex<R>(
         &mut self,
         vars: VarCounter,
-        props: Vec<Prop>,
+        props: AVec<Prop>,
         f: impl FnOnce(&mut Self) -> R,
     ) -> (R, Scope) {
         #[cfg(feature = "verbose")] {
@@ -240,10 +214,17 @@ impl<'a> Proof<'a> {
     }
 
 
+    fn prop_ptr(p: &Prop) -> *const () {
+        match *p {
+            Prop::Nonzero(ref t) => t.as_ptr(),
+            _ => std::ptr::null(),
+        }
+    }
+
     /// Ensure that `premise` appears somewhere in the current context.  Panics if a matching
     /// `Prop` is not found.
     fn require_premise(&self, premise: &Prop) {
-        self.require_premise_matching(|p| p == premise, self.print(premise));
+        self.require_premise_one_of([&|| Cow::Borrowed(premise)]);
     }
 
     /// Ensure the context contains some `Prop` for which `f(prop)` returns true.  `Prop`s from
@@ -252,27 +233,90 @@ impl<'a> Proof<'a> {
     ///
     /// `desc` is a human-readable description of what `f` was searching for, used for error
     /// messages.
-    fn require_premise_matching(
+    fn require_premise_one_of<'b, const N: usize>(
         &self,
-        mut f: impl FnMut(&Prop) -> bool,
-        desc: impl Display,
+        premises: [&dyn Fn() -> Cow<'b, Prop>; N],
     ) {
-        if self.cur.props.iter().any(|p| f(p)) {
+        #[cfg(feature = "playback_search_index")] {
+            let ps = advice::playback::search_index::Tag;
+
+            let (k, premise_fn) = ps.take_index_and_elem(&premises);
+            let premise: Cow<Prop> = premise_fn();
+            let premise: &Prop = &*premise;
+
+            if ps.playback::<bool>() {
+                let (j, prop) = ps.take_index_and_elem(&self.cur.props);
+                require!(premise == prop,
+                    "bad advice: premise not found (j = {}, k = {})", j, k);
+            } else {
+                let (i, scope) = ps.take_index_and_elem(&self.scopes);
+                let (j, prop) = ps.take_index_and_elem(&scope.props);
+                let shift_amount = (self.scopes.len() - i) as u32;
+                require!(premise.eq_shifted(&prop, shift_amount),
+                    "bad advice: premise not found (i = {}, j = {}, k = {})", i, j, k);
+            }
+
             return;
         }
 
-        for (i, s) in self.scopes.iter().enumerate().rev() {
-            let shift_amount = (self.scopes.len() - i) as u32;
-            if s.props.iter().any(|p| f(&p.shift_by(shift_amount))) {
+        let premises: [Cow<Prop>; N] = array::from_fn(|i| premises[i]());
+        let premises: [&Prop; N] = array::from_fn(|i| &*premises[i]);
+
+        let check = |prop, shift_amount| {
+            for (k, &expect_prop) in premises.iter().enumerate() {
+                if expect_prop.eq_shifted(prop, shift_amount) {
+                    return Some(k);
+                }
+            }
+            None
+        };
+
+        for (j, prop) in self.cur.props.iter().enumerate() {
+            if let Some(k) = check(prop, 0) {
+                #[cfg(feature = "recording_search_index")] {
+                    let rs = advice::recording::search_index::Tag;
+                    rs.record(&k);
+                    rs.record(&true);
+                    rs.record(&j);
+                }
                 return;
             }
         }
 
-        die!("missing premise: {}", desc);
+        for (i, s) in self.scopes.iter().enumerate().rev() {
+            let shift_amount = (self.scopes.len() - i) as u32;
+            for (j, prop) in s.props.iter().enumerate() {
+                if let Some(k) = check(prop, shift_amount) {
+                    #[cfg(feature = "recording_search_index")] {
+                        let rs = advice::recording::search_index::Tag;
+                        rs.record(&k);
+                        rs.record(&false);
+                        rs.record(&i);
+                        rs.record(&j);
+                    }
+                    return;
+                }
+            }
+        }
+
+        #[cfg(feature = "verbose")] {
+            let mut desc = String::new();
+            for (i, p) in premises.iter().enumerate() {
+                if i > 0 {
+                    desc.push_str(" or ");
+                }
+                write!(desc, "{}", self.print(p)).unwrap();
+            }
+            die!("missing premise: {}", desc);
+        }
+        #[cfg(not(feature = "verbose"))] {
+            die!("missing premise");
+        }
     }
 
 
     pub fn rule_admit(&mut self, prop: Prop) {
+        record!(Rule::Admit, prop);
         #[cfg(feature = "verbose")] {
             println!("ADMITTED: {}", self.print(&prop));
         }
@@ -281,11 +325,13 @@ impl<'a> Proof<'a> {
 
     /// Introduce the trivial proposition `1`.
     pub fn rule_trivial(&mut self) {
+        record!(Rule::Trivial);
         self.add_prop(Prop::Nonzero(1.into()));
     }
 
     /// Duplicate a `Prop` into the innermost scope.
     pub fn rule_clone(&mut self, pid: PropId) {
+        record!(Rule::Clone, pid);
         let (s, i) = pid;
         let prop = if s == self.scopes.len() {
             self.cur.props[i].clone()
@@ -299,6 +345,7 @@ impl<'a> Proof<'a> {
     /// Swap two `Prop`s in the current scope.  This is useful for rules like `rule_reach_extend`
     /// that operate specifically on the last `Prop` in scope.
     pub fn rule_swap(&mut self, index1: usize, index2: usize) {
+        record!(Rule::Swap, index1, index2);
         require!(index1 < self.cur.props.len());
         require!(index2 < self.cur.props.len());
         self.cur.props.swap(index1, index2);
@@ -312,6 +359,7 @@ impl<'a> Proof<'a> {
         index: usize,
         args: &[Term],
     ) {
+        record!(Rule::Apply, index, args);
         let prop = self.prop(index);
         let binder = match *prop {
             Prop::Forall(ref b) => b,
@@ -342,12 +390,14 @@ impl<'a> Proof<'a> {
         premises: Box<[Prop]>,
         prove: impl FnOnce(&mut Proof),
     ) {
+        record!(Rule::ForallIntro, vars, premises);
         // Check that `conclusion` can be proved given `premises`.
         let ((), mut inner_scope) = self.enter_ex(
             vars,
             premises.clone().into(),
             |pf| {
                 prove(pf);
+                record!(Rule::Done);
             },
         );
         let vars = inner_scope.vars;
@@ -369,6 +419,7 @@ impl<'a> Proof<'a> {
         &mut self,
         f: impl FnOnce(&mut ReachProof),
     ) {
+        record!(Rule::ReachExtend);
         let last_prop = self.cur.props.pop()
             .unwrap_or_else(|| die!("there are no props in the current scope"));
         let rp = match last_prop {
@@ -404,6 +455,7 @@ impl<'a> Proof<'a> {
                     cycles: 0,
                 };
                 f(&mut rpf);
+                record!(Rule::Done);
                 (rpf.state, rpf.cycles)
             },
         );
@@ -433,20 +485,18 @@ impl<'a> Proof<'a> {
         reach_index: usize,
         new_min_cycles: Term,
     ) {
+        record!(Rule::ReachShrink, reach_index, new_min_cycles);
         let rp = match *self.prop_mut(reach_index) {
             Prop::Reachable(ref mut rp) => rp,
             _ => die!("expected prop {} to be Prop::Reachable, but got {}",
                 reach_index, self.print(self.prop(reach_index))),
         };
         let old_min_cycles = mem::replace(&mut rp.min_cycles, new_min_cycles);
-        let prop_ae = Prop::Nonzero(Term::cmpae(old_min_cycles.clone(), new_min_cycles.clone()));
-        let prop_a = Prop::Nonzero(Term::cmpa(old_min_cycles.clone(), new_min_cycles.clone()));
-        let prop_e = Prop::Nonzero(Term::cmpe(old_min_cycles.clone(), new_min_cycles.clone()));
-        self.require_premise_matching(
-            |p| p == &prop_ae || p == &prop_a || p == &prop_e,
-            format_args!("{} or {} or {}",
-                self.print(&prop_ae), self.print(&prop_a), self.print(&prop_e)),
-        );
+        self.require_premise_one_of([
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpae(old_min_cycles, new_min_cycles))),
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpa(old_min_cycles, new_min_cycles))),
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpe(old_min_cycles, new_min_cycles))),
+        ]);
         self.check_updated_prop(reach_index);
     }
 
@@ -460,6 +510,7 @@ impl<'a> Proof<'a> {
         new_vars: VarCounter,
         var_map: &[Option<u32>],
     ) {
+        record!(Rule::ReachRenameVars, index, new_vars, var_map);
         let rp = match *self.prop_mut(index) {
             Prop::Reachable(ref mut rp) => rp,
             _ => die!("expected prop {} to be Prop::Reachable, but got {}",
@@ -505,6 +556,7 @@ impl<'a> Proof<'a> {
         index_zero: usize,
         index_succ: usize,
     ) {
+        record!(Rule::Induction, index_zero, index_succ);
         // Process `Hsucc` first, since it lets us infer the predicate `P`.
         let succ_prop = self.prop(index_succ);
         let succ_binder = match *succ_prop {
@@ -670,12 +722,14 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Introduce a new unconstrained variable.
     pub fn rule_var_fresh(&mut self) -> Term {
+        record!(ReachRule::VarFresh);
         self.fresh_var()
     }
 
     /// Introduce a new variable `x` and add the equality `x == t` to the context.  Returns the new
     /// variable as a `Term`.
     pub fn rule_var_eq(&mut self, t: Term) -> Term {
+        record!(ReachRule::VarEq, t);
         let x = self.fresh_var();
         self.pf.add_prop(Prop::Nonzero(Term::cmpe(x, t)));
         x
@@ -683,6 +737,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Perform one step of execution.  In some cases, this may fail due to a missing precondition.
     pub fn rule_step(&mut self) {
+        record!(ReachRule::Step);
         let instr = self.fetch_instr();
         let x = self.reg_value(instr.r1);
         let y = self.operand_value(instr.op2);
@@ -750,9 +805,12 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         let old_hook = panic::take_hook();
         panic::set_hook(Box::new(|_| {}));
 
-        let ok = panic::catch_unwind(AssertUnwindSafe(|| {
+        let f = AssertUnwindSafe(|| {
             self.rule_step();
-        })).is_ok();
+        });
+        let ok = panic::catch_unwind(|| {
+            advice::rollback_on_panic(f);
+        }).is_ok();
 
         panic::set_hook(old_hook);
 
@@ -764,6 +822,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     /// current scope or an outer scope) showing that the jump condition will result in the
     /// behavior indicated by `taken`.
     pub fn rule_step_jump(&mut self, taken: bool) {
+        record!(ReachRule::StepJump, taken);
         let instr = self.fetch_instr();
         let x = self.reg_value(instr.r1);
         let y = self.operand_value(instr.op2);
@@ -811,6 +870,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     /// Handle a load instruction by introducing a fresh variable for the result.  This gives no
     /// information about the value that was actually loaded.
     pub fn rule_step_load_fresh(&mut self) {
+        record!(ReachRule::StepLoadFresh);
         let instr = self.fetch_instr();
 
         match instr.opcode {
@@ -831,24 +891,25 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     /// Rewrite the value of `reg` to `new`.  Requires the premise `old == new` to be available in
     /// the context.
     pub fn rule_rewrite_reg(&mut self, reg: Reg, new: Term) {
+        record!(ReachRule::RewriteReg, reg, new);
         let old = self.reg_value(reg);
-        let eq1 = Prop::Nonzero(Term::cmpe(old.clone(), new.clone()));
-        let eq2 = Prop::Nonzero(Term::cmpe(old, new.clone()));
-        self.pf.require_premise_matching(
-            |p| p == &eq1 || p == &eq2,
-            format_args!("{} or {}", self.pf.print(&eq1), self.pf.print(&eq2)),
-        );
+        self.require_premise_one_of([
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpe(old, new))),
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpe(new, old))),
+        ]);
         self.set_reg(reg, new);
     }
 
     /// Replace the value of `reg` with a fresh symbolic variable.
     pub fn rule_forget_reg(&mut self, reg: Reg) {
+        record!(ReachRule::ForgetReg, reg);
         let z = self.fresh_var();
         self.set_reg(reg, z);
     }
 
     /// Forget all known facts about memory.
     pub fn rule_forget_mem(&mut self) {
+        record!(ReachRule::ForgetMem);
         self.state.mem = MemState::Log(MemLog::new());
     }
 }

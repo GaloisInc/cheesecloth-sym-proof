@@ -3,8 +3,12 @@
 #![deny(unused_must_use)]
 use std::mem;
 
+#[macro_use] mod macros;
 
+
+pub mod advice;
 pub mod micro_ram;
+pub mod interp;
 pub mod kernel;
 pub mod logic;
 pub mod symbolic;
@@ -17,25 +21,27 @@ pub const WORD_BYTES: Word = mem::size_of::<Word>() as Word;
 pub const WORD_BITS: Word = WORD_BYTES * 8;
 pub type Addr = Word;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum BinOp {
-    And,
-    Or,
-    Xor,
-    Add,
-    Sub,
-    Mull,
-    Umulh,
-    Smulh,
-    Udiv,
-    Umod,
-    Shl,
-    Shr,
-    Cmpe,
-    Cmpa,
-    Cmpae,
-    Cmpg,
-    Cmpge,
+define_numbered_enum! {
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+    pub enum BinOp {
+        And,
+        Or,
+        Xor,
+        Add,
+        Sub,
+        Mull,
+        Umulh,
+        Smulh,
+        Udiv,
+        Umod,
+        Shl,
+        Shr,
+        Cmpe,
+        Cmpa,
+        Cmpae,
+        Cmpg,
+        Cmpge,
+    }
 }
 
 impl BinOp {

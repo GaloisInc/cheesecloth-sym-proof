@@ -19,7 +19,7 @@ pub fn default_fold_var_id<F: Folder + ?Sized>(_f: &mut F, x: VarId) -> VarId {
 }
 
 pub fn default_fold_term<F: Folder + ?Sized>(f: &mut F, x: &Term) -> Term {
-    match *x.kind() {
+    match x.kind() {
         TermKind::Const(x) => Term::const_(x),
         TermKind::Var(v) => Term::var_unchecked(v.fold_with(f)),
         TermKind::Not(t) => Term::not(t.fold_with(f)),

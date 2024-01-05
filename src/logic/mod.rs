@@ -5,6 +5,7 @@ use crate::logic::subst::SubstExt;
 use crate::symbolic;
 
 
+pub mod eq_shifted;
 pub mod fold;
 pub mod print;
 pub mod rename_vars;
@@ -39,6 +40,14 @@ impl VarId {
     pub fn index(self) -> u32 {
         self.0 & !Self::SCOPE_MASK
     }
+
+    pub fn from_raw(raw: u32) -> VarId {
+        VarId(raw)
+    }
+
+    pub fn as_raw(self) -> u32 {
+        self.0
+    }
 }
 
 
@@ -63,6 +72,14 @@ impl VarCounter {
 
     pub fn len(&self) -> usize {
         self.0.index() as usize
+    }
+
+    pub fn from_raw(raw: u32) -> VarCounter {
+        VarCounter(VarId::from_raw(raw))
+    }
+
+    pub fn as_raw(&self) -> u32 {
+        self.0.as_raw()
     }
 }
 
