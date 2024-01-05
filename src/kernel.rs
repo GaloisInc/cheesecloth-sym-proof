@@ -608,10 +608,14 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         self.state.pc
     }
 
-    fn fetch_instr(&self) -> Instr {
-        let pc = self.pc();
+    fn get_instr_at(&self, pc:Addr) -> Instr {
         self.pf.prog.get(pc).cloned()
             .unwrap_or_else(|| die!("program executed out of bounds at {}", pc))
+    }
+    
+    fn fetch_instr(&self) -> Instr {
+        let pc = self.pc();
+        self.get_instr_at(pc)
     }
 
     fn reg_value(&self, reg: Reg) -> Term {
@@ -643,10 +647,25 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     fn finish_instr_jump(&mut self, pc: Addr) {
         self.state.pc = pc;
         self.cycles += 1;
+
+        // Execute one step with the concrete state and validate the
+        // symbolic state with it
+        #[cfg(feature = "debug_symbolic")]
+        self.conc_step();
     }
 
     fn fresh_var(&mut self) -> Term {
         self.pf.cur.vars.fresh()
+    }
+
+    #[cfg(feature = "debug_symbolic")]
+    fn conc_step(&mut self) {
+        // We shouldn't have advice in proofs.
+        // Advice should be handled explicitely.
+        let advice = None;
+        let conc_pc = self.state.conc_pc().unwrap_or(0);
+        let instr = self.get_instr_at(conc_pc);
+        self.state.conc_step(instr, advice);
     }
 
     /// Introduce a new unconstrained variable.

@@ -130,7 +130,7 @@ impl Index<Addr> for Program<'_> {
 
 pub const NUM_REGS: usize = 33;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct State {
     pub pc: Addr,
     pub cycle: Word,
@@ -195,20 +195,20 @@ impl State {
             },
             Opcode::Jmp => {
                 self.pc = y;
-		self.cycle += 1;
+                self.cycle += 1;
                 return;
             },
             Opcode::Cjmp => {
                 if x != 0 {
                     self.pc = y;
-		    self.cycle += 1;
+                    self.cycle += 1;
                     return;
                 }
             },
             Opcode::Cnjmp => {
                 if x == 0 {
                     self.pc = y;
-		    self.cycle += 1;
+                    self.cycle += 1;
                     return;
                 }
             },
