@@ -17,7 +17,7 @@ use crate::logic::rename_vars::RenameVarsExt;
 use crate::logic::shift::ShiftExt;
 use crate::logic::wf::WfExt;
 use crate::micro_ram::{Instr, Opcode, Reg, Operand, MemWidth, Program};
-use crate::symbolic::{self, Memory, MemState, MemLog};
+use crate::symbolic::{self, Memory, MemState, MemConcrete, MemMap, MemLog};
 
 
 #[cfg(any(feature = "recording_rules", feature = "recording_term_index"))]
@@ -31,6 +31,15 @@ macro_rules! record {
 macro_rules! record {
     ($($x:expr),*) => {{
     }};
+}
+
+macro_rules! require_ok {
+    ($x:expr) => {
+        $x.unwrap_or_else(|e| die!("error: {e}"))
+    };
+    ($x:expr, $($args:tt)*) => {
+        $x.unwrap_or_else(|e| die!("{}: {e}", format_args!($($args)*)))
+    };
 }
 
 
@@ -908,8 +917,41 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     }
 
     /// Forget all known facts about memory.
+    #[deprecated = "use self.rule_mem_abs_log(&[]) instead"]
     pub fn rule_forget_mem(&mut self) {
-        record!(ReachRule::ForgetMem);
-        self.state.mem = MemState::Log(MemLog::new());
+        self.rule_mem_abs_log(&[]);
+    }
+
+    /// Common logic for `rule_mem_abs_*`.  Takes an empty `MemState `new`, sets `self.state.mem`
+    /// to `new`, and copies words from the old `MemState` to the new one at each of the provided
+    /// `addrs`.
+    fn mem_abs_common(&mut self, new: MemState, addrs: &[Addr]) {
+        let old = mem::replace(&mut self.state.mem, new);
+        let new = &mut self.state.mem;
+        require_ok!(new.copy_words_from(&old, addrs.iter().copied(), &[]));
+    }
+
+    /// Convert `self.state.mem` to `MemState::Concrete`, and abstract by forgetting all addresses
+    /// except `addrs`.
+    pub fn rule_mem_abs_concrete(&mut self, addrs: &[Addr]) {
+        record!(ReachRule::MemAbsConcrete, addrs);
+        let new = MemState::Concrete(MemConcrete::new());
+        self.mem_abs_common(new, addrs);
+    }
+
+    /// Convert `self.state.mem` to `MemState::Map`, and abstract by forgetting all addresses
+    /// except `addrs`.
+    pub fn rule_mem_abs_map(&mut self, addrs: &[Addr]) {
+        record!(ReachRule::MemAbsMap, addrs);
+        let new = MemState::Map(MemMap::new());
+        self.mem_abs_common(new, addrs);
+    }
+
+    /// Convert `self.state.mem` to `MemState::Log`, and abstract by forgetting all addresses
+    /// except `addrs`.
+    pub fn rule_mem_abs_log(&mut self, addrs: &[Addr]) {
+        record!(ReachRule::MemAbsLog, addrs);
+        let new = MemState::Log(MemLog::new());
+        self.mem_abs_common(new, addrs);
     }
 }

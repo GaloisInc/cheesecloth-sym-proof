@@ -48,6 +48,8 @@ pub enum MemWidth {
 }
 
 impl MemWidth {
+    pub const WORD: MemWidth = MemWidth::W8;
+
     pub fn bytes(self) -> Word {
         match self {
             MemWidth::W1 => 1,

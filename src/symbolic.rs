@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use crate::{Word, WORD_BYTES, Addr};
 use crate::advice::map::AMap;
@@ -13,6 +14,14 @@ use crate::logic::visit::{Visit, Visitor};
 pub trait Memory {
     fn store(&mut self, w: MemWidth, addr: Term, val: Term, props: &[Prop]) -> Result<(), String>;
     fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, String>;
+
+    /// Copy the words at `addrs` from `src` to `dest`.
+    fn copy_words_from<S: Memory>(
+        &mut self,
+        src: &S,
+        addrs: impl IntoIterator<Item = Addr>,
+        props: &[Prop],
+    ) -> Result<(), String>;
 }
 
 
@@ -42,6 +51,21 @@ impl Memory for MemState {
             MemState::Snapshot(ref m) => m.load(w, addr, props),
             MemState::Log(ref m) => m.load(w, addr, props),
             MemState::Multi(ref m) => m.load(w, addr, props),
+        }
+    }
+
+    fn copy_words_from<S: Memory>(
+        &mut self,
+        src: &S,
+        addrs: impl IntoIterator<Item = Addr>,
+        props: &[Prop],
+    ) -> Result<(), String> {
+        match *self {
+            MemState::Concrete(ref mut m) => m.copy_words_from(src, addrs, props),
+            MemState::Map(ref mut m) => m.copy_words_from(src, addrs, props),
+            MemState::Snapshot(ref mut m) => m.copy_words_from(src, addrs, props),
+            MemState::Log(ref mut m) => m.copy_words_from(src, addrs, props),
+            MemState::Multi(ref mut m) => m.copy_words_from(src, addrs, props),
         }
     }
 }
@@ -89,19 +113,31 @@ impl EqShifted for MemState {
 }
 
 
+fn copy_words_from_generic<D: Memory, S: Memory>(
+    dest: &mut D,
+    src: &S,
+    addrs: impl IntoIterator<Item = Addr>,
+    props: &[Prop],
+) -> Result<(), String> {
+    for addr in addrs {
+        assert!(addr % WORD_BYTES == 0, "misaligned access at address 0x{:x}", addr);
+        let addr = Term::const_(addr);
+        let val = src.load(MemWidth::WORD, addr, props)?;
+        dest.store(MemWidth::WORD, addr, val, props)?;
+    }
+    Ok(())
+}
+
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemConcrete {
     pub m: HashMap<Addr, Word>,
-    pub max: Addr,
 }
 
 impl Memory for MemConcrete {
     fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), String> {
         let addr = addr.as_const_or_err()
             .map_err(|e| format!("when evaluating addr: {e}"))?;
-        if addr + w.bytes() >= self.max {
-            return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
-        }
         let val = val.as_const_or_err()
             .map_err(|e| format!("in MemConcrete::store: {e}"))?;
         micro_ram::mem_store(&mut self.m, w, addr, val);
@@ -110,36 +146,46 @@ impl Memory for MemConcrete {
     fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
         let addr = addr.as_const_or_err()
             .map_err(|e| format!("when evaluating addr: {e}"))?;
-        if addr + w.bytes() >= self.max {
-            return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
-        }
         let val = micro_ram::mem_load(&self.m, w, addr);
         Ok(Term::const_(val))
+    }
+
+    fn copy_words_from<S: Memory>(
+        &mut self,
+        src: &S,
+        addrs: impl IntoIterator<Item = Addr>,
+        props: &[Prop],
+    ) -> Result<(), String> {
+        copy_words_from_generic(self, src, addrs, props)
+    }
+}
+
+impl MemConcrete {
+    pub fn new() -> MemConcrete {
+        MemConcrete { m: HashMap::new() }
     }
 }
 
 impl Visit for MemConcrete {
     fn visit_with<F: Visitor + ?Sized>(&self, _f: &mut F) {
-        let MemConcrete { m: _, max: _ } = *self;
+        let MemConcrete { m: _ } = *self;
     }
 }
 
 impl Fold for MemConcrete {
     fn fold_with<F: Folder + ?Sized>(&self, _f: &mut F) -> Self {
-        let MemConcrete { ref m, max } = *self;
+        let MemConcrete { ref m } = *self;
         // Contains no terms.
         MemConcrete {
             m: m.clone(),
-            max,
         }
     }
 }
 
 impl EqShifted for MemConcrete {
     fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
-        let MemConcrete { ref m, max } = *self;
+        let MemConcrete { ref m } = *self;
         m.eq_shifted(&other.m, amount)
-            && max.eq_shifted(&other.max, amount)
     }
 }
 
@@ -149,29 +195,44 @@ pub struct MemMap {
     /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
     /// `Term`.  The `u8` gives the index of the byte to extract in little-endian order.
     pub m: AMap<Addr, (Term, u8)>,
-    pub max: Addr,
 }
 
 impl Memory for MemMap {
     fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), String> {
         let addr = addr.as_const_or_err()
             .map_err(|e| format!("when evaluating addr: {e}"))?;
-        if addr + w.bytes() >= self.max {
-            return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
-        }
+        self.store_concrete(w, addr, val)
+    }
+
+    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
+        let addr = addr.as_const_or_err()
+            .map_err(|e| format!("when evaluating addr: {e}"))?;
+        self.load_concrete(w, addr)
+    }
+
+    fn copy_words_from<S: Memory>(
+        &mut self,
+        src: &S,
+        addrs: impl IntoIterator<Item = Addr>,
+        props: &[Prop],
+    ) -> Result<(), String> {
+        copy_words_from_generic(self, src, addrs, props)
+    }
+}
+
+impl MemMap {
+    pub fn new() -> MemMap {
+        MemMap { m: AMap::new() }
+    }
+
+    pub fn store_concrete(&mut self, w: MemWidth, addr: Addr, val: Term) -> Result<(), String> {
         for offset in 0 .. w.bytes() {
             self.m.insert(addr + offset, (val.clone(), offset as u8));
         }
         Ok(())
     }
 
-    fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
-        let addr = addr.as_const_or_err()
-            .map_err(|e| format!("when evaluating addr: {e}"))?;
-        if addr + w.bytes() >= self.max {
-            return Err(format!("address 0x{:x} out of range; max is 0x{:x}", addr, self.max));
-        }
-
+    pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
         // We currently require the load to match a store exactly, so each consecutive address must
         // contain the next consecutive byte in order (starting from zero), and all bytes should be
         // extracted from the same expression.
@@ -221,7 +282,7 @@ impl Memory for MemMap {
 
 impl Visit for MemMap {
     fn visit_with<F: Visitor + ?Sized>(&self, f: &mut F) {
-        let MemMap { ref m, max: _ } = *self;
+        let MemMap { ref m } = *self;
         for &(t, _) in m.values() {
             t.visit_with(f);
         }
@@ -230,19 +291,17 @@ impl Visit for MemMap {
 
 impl Fold for MemMap {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
-        let MemMap { ref m, max } = *self;
+        let MemMap { ref m } = *self;
         MemMap {
             m: m.iter().map(|(&a, &(t, b))| (a, (t.fold_with(f), b))).collect(),
-            max,
         }
     }
 }
 
 impl EqShifted for MemMap {
     fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
-        let MemMap { ref m, max } = *self;
+        let MemMap { ref m } = *self;
         m.eq_shifted(&other.m, amount)
-            && max.eq_shifted(&other.max, amount)
     }
 }
 
@@ -252,20 +311,54 @@ pub struct MemSnapshot {
     pub base: Addr,
 }
 
+thread_local! {
+    static SNAPSHOT_DATA: RefCell<HashMap<Addr, Word>> = RefCell::new(HashMap::new());
+}
+
 impl Memory for MemSnapshot {
-    fn store(&mut self, w: MemWidth, addr: Term, val: Term, _props: &[Prop]) -> Result<(), String> {
-        let _ = (w, addr, val);
-        todo!("MemSnapshot NYI")
+    fn store(
+        &mut self,
+        _w: MemWidth,
+        _addr: Term,
+        _val: Term,
+        _props: &[Prop],
+    ) -> Result<(), String> {
+        panic!("can't store to MemSnapshot");
     }
     fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
-        let _ = (w, addr);
-        todo!("MemSnapshot NYI")
+        let addr = addr.as_const_or_err()
+            .map_err(|e| format!("when evaluating addr: {e}"))?;
+        let val = self.load_concrete(w, addr)?;
+        Ok(Term::const_(val))
+    }
+
+    fn copy_words_from<S: Memory>(
+        &mut self,
+        _src: &S,
+        _addrs: impl IntoIterator<Item = Addr>,
+        _props: &[Prop],
+    ) -> Result<(), String> {
+        panic!("can't store to MemSnapshot");
+    }
+}
+
+impl MemSnapshot {
+    pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Word, String> {
+        Ok(SNAPSHOT_DATA.with(|c| {
+            micro_ram::mem_load(&c.borrow(), w, self.base + addr)
+        }))
+    }
+
+    pub fn init_data(m: HashMap<Addr, Word>) {
+        SNAPSHOT_DATA.with(|c| {
+            *c.borrow_mut() = m;
+        });
     }
 }
 
 impl Visit for MemSnapshot {
     fn visit_with<F: Visitor + ?Sized>(&self, _f: &mut F) {
-        let MemSnapshot { base: _} = *self;
+        let MemSnapshot { base: _ } = *self;
     }
 }
 
@@ -308,6 +401,15 @@ impl Memory for MemLog {
     fn load(&self, w: MemWidth, addr: Term, _props: &[Prop]) -> Result<Term, String> {
         let _ = (w, addr);
         Err("MemLog load NYI".into())
+    }
+
+    fn copy_words_from<S: Memory>(
+        &mut self,
+        src: &S,
+        addrs: impl IntoIterator<Item = Addr>,
+        props: &[Prop],
+    ) -> Result<(), String> {
+        copy_words_from_generic(self, src, addrs, props)
     }
 }
 
@@ -436,6 +538,15 @@ impl Memory for MemMulti {
                 "couldn't find a region containing address {}", debug_print(&addr))),
         };
         self.region(kind, i).load(w, offset, props)
+    }
+
+    fn copy_words_from<S: Memory>(
+        &mut self,
+        src: &S,
+        addrs: impl IntoIterator<Item = Addr>,
+        props: &[Prop],
+    ) -> Result<(), String> {
+        copy_words_from_generic(self, src, addrs, props)
     }
 }
 
