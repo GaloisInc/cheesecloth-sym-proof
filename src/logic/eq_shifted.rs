@@ -2,7 +2,7 @@ use core::hash::Hash;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
-#[cfg(not(feature = "microram"))]
+#[cfg(not(feature = "microram_api"))]
 use std::collections::HashMap;
 use crate::advice::Record;
 use crate::advice::map::AMap;
@@ -105,7 +105,7 @@ impl<T: EqShifted> EqShifted for Vec<T> {
     }
 }
 
-#[cfg(not(feature = "microram"))]
+#[cfg(not(feature = "microram_api"))]
 impl<K: Eq + Hash, V: EqShifted> EqShifted for HashMap<K, V> {
     fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
         if self.len() != other.len() {

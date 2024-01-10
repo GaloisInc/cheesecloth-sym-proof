@@ -5,7 +5,7 @@
 #![no_std]
 
 extern crate alloc;
-#[cfg(any(not(feature = "microram"), feature = "verbose"))] extern crate std;
+#[cfg(any(not(feature = "microram_api"), feature = "verbose"))] extern crate std;
 
 use core::mem;
 
@@ -18,7 +18,7 @@ pub mod interp;
 pub mod kernel;
 pub mod logic;
 pub mod symbolic;
-#[cfg(not(feature = "microram"))]
+#[cfg(not(feature = "microram_api"))]
 pub mod tactics;
 
 

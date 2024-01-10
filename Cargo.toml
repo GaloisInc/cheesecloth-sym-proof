@@ -21,7 +21,11 @@ bumpalo = "3.14.0"
 [features]
 verbose = []
 debug_symbolic = []
-microram = ["stage4"]
+# Use MicroRAM `__cc_*` APIs within the sym_proof library.  These can either be
+# provided by the MicroRAM compiler or emulated with Rust code.
+microram_api = ["stage4"]
+# Build for running on MicroRAM.  This omits the emulation for `__cc_*` APIs.
+microram = ["microram_api"]
 deny_warnings = []
 
 stage0 = [
@@ -111,7 +115,7 @@ required-features = ["playback_concrete_state"]
 
 [[bin]]
 name = "interp_grit_microram"
-required-features = ["microram"]
+required-features = ["microram_api"]
 
 [profile.dev]
 opt-level = 1

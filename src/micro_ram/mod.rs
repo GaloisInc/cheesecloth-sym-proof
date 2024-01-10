@@ -3,7 +3,7 @@ use core::ops::Index;
 use crate::{Word, Addr, BinOp};
 
 
-#[cfg(not(feature = "microram"))]
+#[cfg(not(feature = "microram_api"))]
 pub mod import;
 pub mod state;
 

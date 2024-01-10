@@ -2,7 +2,7 @@ use crate::{Word, BinOp};
 use crate::logic::VarId;
 
 
-#[cfg(not(feature = "microram"))]
+#[cfg(not(feature = "microram_api"))]
 mod imp_interner {
     #![cfg_attr(feature = "playback_term_table", allow(dead_code))]
     use core::cell::RefCell;

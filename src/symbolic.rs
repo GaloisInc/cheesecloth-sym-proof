@@ -399,7 +399,7 @@ pub struct MemSnapshot {
     pub base: Addr,
 }
 
-#[cfg(not(feature = "microram"))]
+#[cfg(not(feature = "microram_api"))]
 std::thread_local! {
     static SNAPSHOT_DATA: RefCell<BTreeMap<Addr, Word>> = RefCell::new(BTreeMap::new());
 }
@@ -433,12 +433,12 @@ impl Memory for MemSnapshot {
 
 impl MemSnapshot {
     pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Word, Error> {
-        #[cfg(not(feature = "microram"))] {
+        #[cfg(not(feature = "microram_api"))] {
             return Ok(SNAPSHOT_DATA.with(|c| {
                 micro_ram::state::mem_load(&c.borrow(), w, self.base + addr)
             }));
         }
-        #[cfg(feature = "microram")] {
+        #[cfg(feature = "microram_api")] {
             extern "C" {
                 fn cc_load_snapshot_word(addr: u64) -> u64;
             }
@@ -448,7 +448,7 @@ impl MemSnapshot {
         }
     }
 
-    #[cfg(not(feature = "microram"))]
+    #[cfg(not(feature = "microram_api"))]
     pub fn init_data(m: BTreeMap<Addr, Word>) {
         SNAPSHOT_DATA.with(|c| {
             *c.borrow_mut() = m;

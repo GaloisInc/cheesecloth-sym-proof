@@ -5,8 +5,8 @@ use core::convert::{TryFrom, TryInto};
 use core::mem;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-#[cfg(not(feature = "microram"))] use std::io::{Read, Write};
-#[cfg(not(feature = "microram"))] use std::panic::{self, UnwindSafe};
+#[cfg(not(feature = "microram_api"))] use std::io::{Read, Write};
+#[cfg(not(feature = "microram_api"))] use std::panic::{self, UnwindSafe};
 use log::trace;
 use serde_cbor;
 use crate::{Word, BinOp};
@@ -22,7 +22,7 @@ pub mod vec;
 
 pub type Value = u64;
 
-#[cfg(feature = "microram")]
+#[cfg(feature = "microram_api")]
 extern "C" {
     fn __cc_advise(max: Value) -> Value;
 }
@@ -41,10 +41,10 @@ impl<T> FakeThreadLocal<T> {
 }
 
 
-#[cfg(not(feature = "microram"))]
+#[cfg(not(feature = "microram_api"))]
 use std::thread_local;
 
-#[cfg(feature = "microram")]
+#[cfg(feature = "microram_api")]
 macro_rules! thread_local {
     (
         static $NAME:ident: $Ty:ty = $init:expr;
@@ -89,7 +89,7 @@ impl RecordingStream {
         }
     }
 
-    #[cfg(not(feature = "microram"))]
+    #[cfg(not(feature = "microram_api"))]
     pub fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         serde_cbor::to_writer(w, &self.buf)
     }
@@ -117,7 +117,7 @@ pub trait RecordingStreamTag: Sized + Copy {
         self.put(v.try_into().ok().unwrap());
     }
 
-    #[cfg(not(feature = "microram"))]
+    #[cfg(not(feature = "microram_api"))]
     fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         self.with(|rs| mem::replace(rs, RecordingStream::new()).finish(w))
     }
@@ -131,7 +131,7 @@ macro_rules! recording_stream {
     ($name:ident) => {
         pub mod $name {
             use core::cell::RefCell;
-            #[cfg(not(feature = "microram"))] use std::thread_local;
+            #[cfg(not(feature = "microram_api"))] use std::thread_local;
             use crate::advice::{RecordingStream, RecordingStreamTag};
 
             thread_local! {
@@ -203,7 +203,7 @@ impl ChunkedRecordingStream {
         &mut self.chunks[id.0]
     }
 
-    #[cfg(not(feature = "microram"))]
+    #[cfg(not(feature = "microram_api"))]
     pub fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         use std::collections::HashSet;
         let omit = self.omit_chunks.into_iter().collect::<HashSet<_>>();
@@ -238,7 +238,7 @@ pub trait ChunkedRecordingStreamTag: Sized + Copy {
         self.mk_chunk_tag(id)
     }
 
-    #[cfg(not(feature = "microram"))]
+    #[cfg(not(feature = "microram_api"))]
     fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         self.with(|crs| mem::replace(crs, ChunkedRecordingStream::new()).finish(w))
     }
@@ -249,7 +249,7 @@ macro_rules! chunked_recording_stream {
     ($name:ident) => {
         pub mod $name {
             use core::cell::RefCell;
-            #[cfg(not(feature = "microram"))] use std::thread_local;
+            #[cfg(not(feature = "microram_api"))] use std::thread_local;
             use crate::advice::{
                 RecordingStream, RecordingStreamTag,
                 ChunkedRecordingStream, ChunkedRecordingStreamTag, ChunkId,
@@ -303,7 +303,7 @@ impl PlaybackStream {
         }
     }
 
-    #[cfg(not(feature = "microram"))]
+    #[cfg(not(feature = "microram_api"))]
     pub fn load(&mut self, r: impl Read) -> serde_cbor::Result<()> {
         assert!(!self.inited, "stream has already been initialized");
         let buf = serde_cbor::from_reader(r)?;
@@ -313,7 +313,7 @@ impl PlaybackStream {
         Ok(())
     }
 
-    #[cfg(not(feature = "microram"))]
+    #[cfg(not(feature = "microram_api"))]
     pub fn take(&mut self) -> Value {
         assert!(self.inited, "tried to read from uninitialized stream");
         assert!(self.pos < self.buf.len(), "tried to read past end of stream (at {})", self.pos);
@@ -325,19 +325,19 @@ impl PlaybackStream {
         v
     }
 
-    #[cfg(not(feature = "microram"))]
+    #[cfg(not(feature = "microram_api"))]
     pub fn take_bounded(&mut self, max: Value) -> Value {
         let v = self.take();
         assert!(v <= max);
         v
     }
 
-    #[cfg(feature = "microram")]
+    #[cfg(feature = "microram_api")]
     pub fn take(&mut self) -> Value {
         unsafe { __cc_advise(Value::MAX) }
     }
 
-    #[cfg(feature = "microram")]
+    #[cfg(feature = "microram_api")]
     pub fn take_bounded(&mut self, max: Value) -> Value {
         unsafe { __cc_advise(max) }
     }
@@ -346,7 +346,7 @@ impl PlaybackStream {
 pub trait PlaybackStreamTag: Sized + Copy {
     fn with<R>(self, f: impl FnOnce(&mut PlaybackStream) -> R) -> R;
 
-    #[cfg(not(feature = "microram"))]
+    #[cfg(not(feature = "microram_api"))]
     fn load(self, r: impl Read) -> serde_cbor::Result<()> {
         self.with(|ps| ps.load(r))
     }
@@ -401,7 +401,7 @@ macro_rules! playback_stream_inner {
     ($name:ident) => {
         pub mod $name {
             use core::cell::RefCell;
-            #[cfg(not(feature = "microram"))] use std::thread_local;
+            #[cfg(not(feature = "microram_api"))] use std::thread_local;
             use crate::advice::{PlaybackStream, PlaybackStreamTag};
 
             thread_local! {
@@ -1056,7 +1056,7 @@ pub mod playback {
 }
 
 
-#[cfg(not(feature = "microram"))]
+#[cfg(not(feature = "microram_api"))]
 mod load_finish {
     // Helper functions in this module are used only when certain features are enabled.
     #![allow(dead_code)]
@@ -1193,10 +1193,10 @@ mod load_finish {
     }
 }
 
-#[cfg(not(feature = "microram"))] pub use self::load_finish::{load, finish};
+#[cfg(not(feature = "microram_api"))] pub use self::load_finish::{load, finish};
 
 
-#[cfg(not(feature = "microram"))]
+#[cfg(not(feature = "microram_api"))]
 pub fn rollback_on_panic<F: FnOnce() -> R + UnwindSafe, R>(f: F) -> R {
     macro_rules! rollback_on_panic_body {
         ($f:expr; $($stream:ident),*) => {{

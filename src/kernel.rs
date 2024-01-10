@@ -676,7 +676,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     #[cfg(feature = "debug_symbolic")]
     pub fn print_conc_st(&self) {
-        #[cfg(all(feature = "verbose", not(feature = "microram")))] {
+        #[cfg(all(feature = "verbose", not(feature = "microram_api")))] {
             eprintln!("CONCRETE REGS: {:?}",self.state.conc_st.clone().map(|st| st.regs));
         }
     }
@@ -843,7 +843,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Try to take a step.  Returns `true` on success or `false` if `rule_step` panics.  On
     /// failure, the proof state remains unchanged.
-    #[cfg(not(feature = "microram"))]
+    #[cfg(not(feature = "microram_api"))]
     pub fn try_rule_step(&mut self) -> Result<(),String> {
         use std::panic::{self, AssertUnwindSafe};
 
@@ -883,7 +883,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     /// constant. On loads, it can still sneak symbolic values from
     /// memory into registers. On failure, the proof state remains
     /// unchanged.
-    #[cfg(not(feature = "microram"))]
+    #[cfg(not(feature = "microram_api"))]
     pub fn try_rule_step_concrete(&mut self) -> Result<(),String> {
         let instr = self.fetch_instr();
         let x = self.reg_value(instr.r1);

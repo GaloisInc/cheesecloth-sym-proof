@@ -4,14 +4,14 @@ use crate::logic::{Term, TermKind, VarId};
 use serde::{Serialize, Deserialize};
 
 
-#[cfg(not(feature = "microram"))]
+#[cfg(not(feature = "microram_api"))]
 pub mod recording;
-#[cfg(not(feature = "microram"))]
+#[cfg(not(feature = "microram_api"))]
 pub mod playback;
 
-#[cfg(feature = "microram")]
+#[cfg(feature = "microram_api")]
 pub mod playback_microram;
-#[cfg(feature = "microram")]
+#[cfg(feature = "microram_api")]
 pub use self::playback_microram as playback;
 
 
