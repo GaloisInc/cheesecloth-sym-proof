@@ -174,6 +174,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cheesecloth-alloc"
+version = "0.1.0"
+
+[[package]]
 name = "cheesecloth-derive-ir-typed"
 version = "0.1.0"
 dependencies = [
@@ -933,6 +937,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "cheesecloth",
+ "cheesecloth-alloc",
  "env_logger",
  "log",
  "serde",

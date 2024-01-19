@@ -18,6 +18,8 @@ log = "0.4"
 env_logger = "0.7"
 bumpalo = "3.14.0"
 
+cheesecloth-alloc = { path = "../rust-support/cheesecloth-alloc", optional = true }
+
 [features]
 verbose = []
 debug_symbolic = []
@@ -25,7 +27,7 @@ debug_symbolic = []
 # provided by the MicroRAM compiler or emulated with Rust code.
 microram_api = ["stage4"]
 # Build for running on MicroRAM.  This omits the emulation for `__cc_*` APIs.
-microram = ["microram_api"]
+microram = ["microram_api", "cheesecloth-alloc"]
 deny_warnings = []
 
 stage0 = [
