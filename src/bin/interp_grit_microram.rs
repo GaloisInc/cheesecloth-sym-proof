@@ -35,6 +35,7 @@ use sym_proof::symbolic::{self, MemState, MemSnapshot};
 
 // Initial snapshot
 
+#[derive(Clone, Debug)]
 struct CpuState {
     pc: Word,
     cycle: Word,
@@ -97,8 +98,15 @@ mod emulate_snapshot {
 #[cfg(feature = "microram")]
 #[no_mangle]
 extern "C" fn cc_load_snapshot_word(addr: u64) -> u64 {
-    assert!(addr % mem::size_of::<u64>() == 0);
-    ptr::read_volatile(addr as usize as *mut u64)
+    // TODO/HACK: hardcoded initial state from grit concrete execution
+    //assert!(addr % mem::size_of::<u64>() as u64 == 0);
+    //unsafe { ptr::read_volatile(addr as usize as *mut u64) }
+
+    if addr == 8 {
+        return 2386;
+    } else {
+        panic!()
+    }
 }
 
 
@@ -193,6 +201,21 @@ fn run() -> ! {
     // ----------------------------------------
 
     let mut pf = Proof::new(prog);
+
+    unsafe {
+        // TODO/HACK: hardcoded initial state from grit concrete execution
+        SNAPSHOT_CPU_STATE = CpuState {
+            pc: 67,
+            cycle: 584,
+            regs: [
+                0, 1489, 2147483432, 0, 0, 0, 0, 0,
+                64, 24, 4294967512, 135, 63, 4294967513, 0, 4294967513,
+                0, 0, 0, 0, 4294967392, 4294967312, 4, 48,
+                4, 16, 40, 4, 0, 0, 0, 0,
+                4294967512,
+            ]
+        };
+    }
 
     // `conc_state` is reachable.
     //
