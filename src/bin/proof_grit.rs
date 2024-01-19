@@ -61,7 +61,9 @@ fn run(path: &str) -> Result<(), String> {
 
     // Record the concrete state so we don't need to rerun the concrete prefix in later stages.
     #[cfg(feature = "recording_concrete_state")] {
-        use std::fs::File;
+        use std::fs::{self, File};
+        fs::create_dir_all("advice")
+            .map_err(|e| e.to_string())?;
         let mut f = File::create("advice/concrete_state.cbor")
             .map_err(|e| e.to_string())?;
         serde_cbor::to_writer(f, &conc_state)
