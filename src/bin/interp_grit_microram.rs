@@ -10,7 +10,17 @@
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
 #![cfg_attr(feature = "deny_warnings", deny(warnings))]
-use env_logger;
+#![cfg_attr(feature = "microram", no_std)]
+#![cfg_attr(feature = "microram", no_main)]
+#![cfg_attr(feature = "microram", feature(default_alloc_error_handler))]
+#![cfg_attr(feature = "microram", feature(lang_items))]
+
+extern crate alloc;
+
+use core::mem;
+use core::ptr;
+use alloc::boxed::Box;
+#[cfg(feature = "microram")] use cheesecloth_alloc;
 use sym_proof::Word;
 use sym_proof::advice;
 use sym_proof::interp;
@@ -147,18 +157,6 @@ fn exit() -> ! {
     std::process::exit(0);
 }
 
-#[cfg(feature = "microram")]
-fn exit() -> ! {
-    extern "C" {
-        fn __cc_answer(val: usize) -> !;
-    }
-    unsafe {
-        ptr::write_volatile(0xffff_ffff_ffff_fff0 as *mut usize, 1);
-        __cc_answer(1);
-    }
-}
-
-
 #[cfg(not(feature = "microram"))]
 #[track_caller]
 fn fail() -> ! {
@@ -166,10 +164,20 @@ fn fail() -> ! {
 }
 
 #[cfg(feature = "microram")]
-fn fail() -> ! {
-    extern "C" {
-        fn __cc_answer(val: usize) -> !;
+extern "C" {
+    fn __cc_answer(val: usize) -> !;
+}
+
+#[cfg(feature = "microram")]
+fn exit() -> ! {
+    unsafe {
+        ptr::write_volatile(0xffff_ffff_ffff_fff0 as *mut usize, 1);
+        __cc_answer(1);
     }
+}
+
+#[cfg(feature = "microram")]
+fn fail() -> ! {
     unsafe {
         __cc_answer(0);
     }
@@ -240,6 +248,34 @@ fn main() {
 }
 
 #[cfg(feature = "microram")]
+#[no_mangle]
 fn main() {
     run();
+}
+
+
+#[cfg(feature = "microram")]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    fail();
+}
+
+#[cfg(feature = "microram")]
+#[lang = "eh_personality"]
+extern "C" fn eh_personality() {}
+
+
+#[cfg(not(feature = "microram"))]
+mod cc_trace {
+    use std::ffi::CStr;
+
+    #[no_mangle]
+    unsafe extern "C" fn __cc_trace(s: *const u8) {
+        eprintln!("[TRACE] {:?}", CStr::from_ptr(s as *const i8));
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn __cc_trace_exec(s: *const u8, arg0: usize, arg1: usize, arg2: usize, arg3: usize) {
+        eprintln!("[TRACE] {:?}({:x}, {:x}, {:x}, {:x})", CStr::from_ptr(s as *const i8), arg0, arg1, arg2, arg3);
+    }
 }

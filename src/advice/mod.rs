@@ -333,7 +333,7 @@ impl PlaybackStream {
 
     #[cfg(feature = "microram_api")]
     pub fn take(&mut self) -> Value {
-        unsafe { __cc_advise(Value::MAX) }
+        self.take_bounded(Value::MAX)
     }
 
     #[cfg(feature = "microram_api")]
