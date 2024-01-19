@@ -4,7 +4,6 @@
 use core::cell::RefCell;
 use alloc::boxed::Box;
 use core::mem;
-use serde_cbor;
 use crate::logic::TermKind;
 use super::RawTermKind;
 

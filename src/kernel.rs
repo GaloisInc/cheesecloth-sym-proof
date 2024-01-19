@@ -39,10 +39,10 @@ macro_rules! record {
 
 macro_rules! require_ok {
     ($x:expr) => {
-        $x.unwrap_or_else(|e| die!("error: {e}"))
+        $x.unwrap_or_else(|e| die!("error: {}", e))
     };
     ($x:expr, $($args:tt)*) => {
-        $x.unwrap_or_else(|e| die!("{}: {e}", format_args!($($args)*)))
+        $x.unwrap_or_else(|e| die!("{}: {}", format_args!($($args)*), e))
     };
 }
 
@@ -782,15 +782,15 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
             Opcode::Jmp => {
                 let dest = y.as_const_or_err()
-                    .unwrap_or_else(|e| die!("error evaluating jmp dest: {e}"));
+                    .unwrap_or_else(|e| die!("error evaluating jmp dest: {}", e));
                 self.finish_instr_jump(dest);
                 return;
             },
             Opcode::Cjmp => {
                 let cond = x.as_const_or_err()
-                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
+                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {}", e));
                 let dest = y.as_const_or_err()
-                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
+                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {}", e));
                 if cond == 0 {
                     self.finish_instr();
                     return;
@@ -801,9 +801,9 @@ impl<'a, 'b> ReachProof<'a, 'b> {
             },
             Opcode::Cnjmp => {
                 let cond = x.as_const_or_err()
-                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
+                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {}", e));
                 let dest = y.as_const_or_err()
-                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
+                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {}", e));
                 if cond != 0 {
                     self.finish_instr();
                     return;
@@ -932,7 +932,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
         if taken {
             let dest = y.as_const_or_err()
-                .unwrap_or_else(|e| die!("error evaluating jmp dest: {e}"));
+                .unwrap_or_else(|e| die!("error evaluating jmp dest: {}", e));
             #[cfg(feature = "verbose")] {
                 println!("run {}: {:?} (jump, taken)", self.pc(), instr);
             }

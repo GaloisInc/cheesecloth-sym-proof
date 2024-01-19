@@ -2,13 +2,12 @@ use core::any;
 use core::array;
 use core::cell::Cell;
 use core::convert::{TryFrom, TryInto};
-use core::mem;
+use core::mem::{self, MaybeUninit};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 #[cfg(not(feature = "microram_api"))] use std::io::{Read, Write};
 #[cfg(not(feature = "microram_api"))] use std::panic::{self, UnwindSafe};
 use log::trace;
-use serde_cbor;
 use crate::{Word, BinOp};
 use crate::logic::{Term, VarId, VarCounter, Binder, Prop, ReachableProp, StatePred};
 use crate::micro_ram::MemWidth;
@@ -576,7 +575,14 @@ impl<T: Record, const N: usize> Record for [T; N] {
 
 impl<T: Playback, const N: usize> Playback for [T; N] {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        array::from_fn(|_| ps.playback())
+        unsafe {
+            let mut arr = MaybeUninit::<[T; N]>::uninit();
+            let ptr = arr.as_mut_ptr() as *mut T;
+            for i in 0 .. N {
+                ptr.add(i).write(ps.playback());
+            }
+            arr.assume_init()
+        }
     }
 }
 
