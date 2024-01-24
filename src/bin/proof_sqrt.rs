@@ -211,11 +211,11 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
 
     // We first prove a lemma of the form:
-    //      forall b n,
+    //      forall b i,
     //          i > 0 ->
-    //          Max > i + 1 ->
-    //          reach(st_loop(i), b) ->
-    //          reach(st_loop(i + 2), b + 5460) ->
+    //          I_MAX > i + 1 ->
+    //          reach(b, st_loop(i)) ->
+    //          reach(b + 5460, st_loop(i + 2))
     eprintln!("\n# Prove p_iter");
     let p_iter = pf.tactic_forall_intro(
         |vars| {
@@ -232,16 +232,16 @@ fn run(path: &str) -> Result<(), String> {
             ], i)
         },
         |pf, i| {
-            // The reachability hypothesis must bt the first one. It
-            // is in the next context (1) and it is the third prop (2)
+            // Premises:
+            // i > 0
+            let i_gt_1 = (1,0);
+            // I_MAX > i + 1
+            let i1_bound = (1,1);
+            // reach(b, st_loop(i))
             let p_reach = (1, 2);
 
-            // i > 1 -> ((1 == i) == 0)
-            let i_gt_1 = (1,0);
-            let i1_bound = (1,1);
-
+            // Prove: i != 0
             println!("==== ADMIT: \n\t forall i, i > 1 -> ((1 == i) == 0)");
-
             let admit1 = pf.tactic_admit(
                 Prop::Forall(
                     Binder::new(|vars| {
@@ -252,10 +252,11 @@ fn run(path: &str) -> Result<(), String> {
                     })
                 ));
             let _i_not_0 = pf.tactic_apply(admit1, &[i]);
-            // i > 1 ->  MAX > i+1 ->  ((1 == (i + 1)) == 0)
-            println!("==== ADMIT: \n\t i > 1 ->  MAX > i+1 -> -> ((1 == (i + 1)) == 0)");
-            pf.show_prop(i_gt_1);
-            pf.show_prop(i1_bound);
+
+            // Prove: i + 1 != 0
+            println!("==== ADMIT: \n\t i > 1 -> MAX > i+1 -> ((1 == (i + 1)) == 0)");
+            //pf.show_prop(i_gt_1);
+            //pf.show_prop(i1_bound);
             let admit2 = pf.tactic_admit(
                 Prop::Forall(
                     Binder::new(|vars| {
@@ -267,13 +268,14 @@ fn run(path: &str) -> Result<(), String> {
                     })
                 ));            
             let i1_not_0 = pf.tactic_apply(admit2, &[i]);
+
+            // Extend `p_reach` with two iterations worth of steps.
             let (p_reach, _i1_not_0) = pf.tactic_swap(p_reach, i1_not_0);
-
             pf.tactic_reach_extend(p_reach, |rpf| {
-
                 // rpf.show_state();
 
-                // Define the proof for one single loop iteration.
+                // Define the proof for one single loop iteration.  The counter `n` is used to
+                // number the steps in the debug output.
                 let mut one_loop_proof = |n:&mut u32| -> () {
                     eprintln!("\t=== {}. Concretely until the symbolic step. pc {}, cycle {:?}", n,
                               rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
@@ -289,7 +291,7 @@ fn run(path: &str) -> Result<(), String> {
                     eprintln!("\t=== {}. Replace the symbolic comparison with concrete value.
                                (i==1) -> 0. pc {}, cycle {:?}", n,
                               rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
-                    rpf.rule_rewrite_reg(32,Term::const_(0));
+                    rpf.rule_rewrite_reg(32, Term::const_(0));
                     *n += 1;
 
                     eprintln!("\t=== {}. Concretely until the symb. store. pc {}, cycle {:?}", n,
@@ -336,16 +338,33 @@ fn run(path: &str) -> Result<(), String> {
                 };
 
                 // Apply the proof to two loops.
-                let steps_counter: &mut u32 = &mut 1;
+                let mut steps_counter = 1;
                 println!("=== Prove the first loop");
-                one_loop_proof(steps_counter);
+                one_loop_proof(&mut steps_counter);
                 println!("=== Prove the second loop");
-                one_loop_proof(steps_counter);
+                one_loop_proof(&mut steps_counter);
 
             });
 
         },
     );
+
+    {
+        eprintln!("p_iter prop:");
+        let prop = &pf.props()[p_iter.1];
+        let b = match *prop {
+            Prop::Forall(ref b) => b,
+            _ => panic!(),
+        };
+
+        for (i, p) in b.inner.0.iter().enumerate() {
+            eprintln!("hyp.{}: {}", i, pf.print_adj(1, p));
+        }
+        eprintln!("concl: {}", pf.print_adj(1, &b.inner.1));
+    }
+
+
+
 
 
     // ----------------------------------------
@@ -415,6 +434,9 @@ fn run(path: &str) -> Result<(), String> {
             );
         },
         |pf, n| {
+            eprintln!(" -- context for inductive case: --");
+            pf.show_context();
+            eprintln!(" -- end of context --");
             pf.tactic_forall_intro(
                 |vars| {
                     let n = n.shift();
