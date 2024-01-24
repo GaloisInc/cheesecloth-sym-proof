@@ -39,7 +39,7 @@ pub enum Opcode {
     Advise,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash )]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub enum MemWidth {
     W1,
     W2,

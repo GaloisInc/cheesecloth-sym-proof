@@ -987,15 +987,15 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     /// Common logic for `rule_mem_abs_*`.  Takes an empty `MemState `new`, sets `self.state.mem`
     /// to `new`, and copies words from the old `MemState` to the new one at each of the provided
     /// `addrs`.
-    fn mem_abs_common(&mut self, new: MemState, addrs: &[Addr]) {
+    fn mem_abs_common(&mut self, new: MemState, addrs: &[(Addr, MemWidth)]) {
         let old = mem::replace(&mut self.state.mem, new);
         let new = &mut self.state.mem;
-        require_ok!(new.copy_words_from(&old, addrs.iter().copied(), &[]));
+        require_ok!(new.copy_from(&old, addrs.iter().copied(), &[]));
     }
 
     /// Convert `self.state.mem` to `MemState::Concrete`, and abstract by forgetting all addresses
     /// except `addrs`.
-    pub fn rule_mem_abs_concrete(&mut self, addrs: &[Addr]) {
+    pub fn rule_mem_abs_concrete(&mut self, addrs: &[(Addr, MemWidth)]) {
         record!(ReachRule::MemAbsConcrete, addrs);
         let new = MemState::Concrete(MemConcrete::new());
         self.mem_abs_common(new, addrs);
@@ -1003,7 +1003,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Convert `self.state.mem` to `MemState::Map`, and abstract by forgetting all addresses
     /// except `addrs`.
-    pub fn rule_mem_abs_map(&mut self, addrs: &[Addr]) {
+    pub fn rule_mem_abs_map(&mut self, addrs: &[(Addr, MemWidth)]) {
         record!(ReachRule::MemAbsMap, addrs);
         let new = MemState::Map(MemMap::new());
         self.mem_abs_common(new, addrs);
@@ -1011,7 +1011,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Convert `self.state.mem` to `MemState::Log`, and abstract by forgetting all addresses
     /// except `addrs`.
-    pub fn rule_mem_abs_log(&mut self, addrs: &[Addr]) {
+    pub fn rule_mem_abs_log(&mut self, addrs: &[(Addr, MemWidth)]) {
         record!(ReachRule::MemAbsLog, addrs);
         let new = MemState::Log(MemLog::new());
         self.mem_abs_common(new, addrs);

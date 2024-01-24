@@ -16,10 +16,10 @@ pub trait Memory {
     fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, String>;
 
     /// Copy the words at `addrs` from `src` to `dest`.
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String>;
 }
@@ -54,18 +54,18 @@ impl Memory for MemState {
         }
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String> {
         match *self {
-            MemState::Concrete(ref mut m) => m.copy_words_from(src, addrs, props),
-            MemState::Map(ref mut m) => m.copy_words_from(src, addrs, props),
-            MemState::Snapshot(ref mut m) => m.copy_words_from(src, addrs, props),
-            MemState::Log(ref mut m) => m.copy_words_from(src, addrs, props),
-            MemState::Multi(ref mut m) => m.copy_words_from(src, addrs, props),
+            MemState::Concrete(ref mut m) => m.copy_from(src, addrs, props),
+            MemState::Map(ref mut m) => m.copy_from(src, addrs, props),
+            MemState::Snapshot(ref mut m) => m.copy_from(src, addrs, props),
+            MemState::Log(ref mut m) => m.copy_from(src, addrs, props),
+            MemState::Multi(ref mut m) => m.copy_from(src, addrs, props),
         }
     }
 }
@@ -113,17 +113,17 @@ impl EqShifted for MemState {
 }
 
 
-fn copy_words_from_generic<D: Memory, S: Memory>(
+fn copy_from_generic<D: Memory, S: Memory>(
     dest: &mut D,
     src: &S,
-    addrs: impl IntoIterator<Item = Addr>,
+    addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
     props: &[Prop],
 ) -> Result<(), String> {
-    for addr in addrs {
-        assert!(addr % WORD_BYTES == 0, "misaligned access at address 0x{:x}", addr);
+    for (addr, w) in addrs {
+        assert!(addr % w.bytes() == 0, "misaligned access at address 0x{:x}, width {:?}", addr, w);
         let addr = Term::const_(addr);
-        let val = src.load(MemWidth::WORD, addr, props)?;
-        dest.store(MemWidth::WORD, addr, val, props)?;
+        let val = src.load(w, addr, props)?;
+        dest.store(w, addr, val, props)?;
     }
     Ok(())
 }
@@ -150,13 +150,13 @@ impl Memory for MemConcrete {
         Ok(Term::const_(val))
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String> {
-        copy_words_from_generic(self, src, addrs, props)
+        copy_from_generic(self, src, addrs, props)
     }
 }
 
@@ -218,13 +218,13 @@ impl Memory for MemMap {
         self.load_concrete(w, addr)
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String> {
-        copy_words_from_generic(self, src, addrs, props)
+        copy_from_generic(self, src, addrs, props)
     }
 }
 
@@ -379,10 +379,10 @@ impl Memory for MemSnapshot {
         Ok(Term::const_(val))
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         _src: &S,
-        _addrs: impl IntoIterator<Item = Addr>,
+        _addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         _props: &[Prop],
     ) -> Result<(), String> {
         panic!("can't store to MemSnapshot");
@@ -450,13 +450,13 @@ impl Memory for MemLog {
         Err("MemLog load NYI".into())
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String> {
-        copy_words_from_generic(self, src, addrs, props)
+        copy_from_generic(self, src, addrs, props)
     }
 }
 
@@ -587,13 +587,13 @@ impl Memory for MemMulti {
         self.region(kind, i).load(w, offset, props)
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String> {
-        copy_words_from_generic(self, src, addrs, props)
+        copy_from_generic(self, src, addrs, props)
     }
 }
 
