@@ -21,11 +21,11 @@ use sym_proof::logic::shift::ShiftExt;
 use sym_proof::micro_ram::Program;
 use sym_proof::micro_ram::import;
 use sym_proof::micro_ram::{Opcode, MemWidth, mem_load};
-use sym_proof::symbolic::{self, MemState, MemLog, Memory, MemMap, MemConcrete};
+use sym_proof::symbolic::{self, MemState, MemSnapshot, Memory, MemMap, MemConcrete};
 use sym_proof::tactics::{Tactics, ReachTactics};
 use witness_checker::micro_ram::types::Advice;
 
-const I_MAX:u64 = i64::MAX as u64;
+const I_MAX:u64 = 4_000_000_000;
 
 fn run(path: &str) -> Result<(), String> {
     let exec = import::load_exec(path);
@@ -75,6 +75,70 @@ fn run(path: &str) -> Result<(), String> {
     }
     eprintln!("\tConcretely reached {} in {} cycle.", conc_state.pc, conc_state.cycle);
 
+    // Run two loop iterations to normalize the state of memory and get back to the start.  While
+    // running, we also record addresses in memory that are loaded or stored during the loop.
+    let mut load_addrs = Vec::new();
+    let mut store_addrs = Vec::new();
+    let mut all_addrs = Vec::new();
+    let start_cycle = conc_state.cycle;
+    for _ in 0 .. 2 {
+        loop {
+            let instr = prog[conc_state.pc];
+            let cyc = conc_state.cycle;
+            let adv: Option<u64> = advs.get(&(cyc + 1)).cloned();
+
+            match instr.opcode {
+                Opcode::Load(w) => {
+                    let addr = conc_state.operand_value(instr.op2);
+                    load_addrs.push((addr, w));
+                    all_addrs.push((addr, w));
+                },
+                Opcode::Store(w) => {
+                    let addr = conc_state.operand_value(instr.op2);
+                    store_addrs.push((addr, w));
+                    all_addrs.push((addr, w));
+                },
+                _ => ()
+            }
+
+            conc_state.step(instr, adv);
+
+            if conc_state.pc == loop_addr {
+                break;
+            }
+        }
+    }
+    eprintln!("load_addrs size: {}", load_addrs.len());
+    eprintln!("store_addrs size: {}", store_addrs.len());
+    eprintln!("all_addrs size: {}", all_addrs.len());
+
+    // Postprocess `all_addrs` by removing entries that are overwritten later.
+    let all_addrs = {
+        // Process stores in reverse order, so if write `i` is overwritten by `j`, `j` will be seen
+        // first.
+        let mut bytes_touched = HashSet::new();
+        let mut addrs_rev = Vec::new();
+        let iter = store_addrs.into_iter().rev()
+            .chain(load_addrs.into_iter().rev());
+        for (addr, w) in iter {
+            let mut all_touched = true;
+            for b in 0 .. w.bytes() {
+                let untouched = bytes_touched.insert(addr + b);
+                if untouched {
+                    all_touched = false;
+                }
+            }
+            if all_touched {
+                continue;
+            }
+            addrs_rev.push((addr, w));
+        }
+
+        addrs_rev.reverse();
+        addrs_rev
+    };
+
+
     // ----------------------------------------
     // For diagnostics on registers
     // Change num_loops=10 to see what
@@ -122,8 +186,10 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
     let mut pf = Proof::new(prog);
 
+    MemSnapshot::init_data(conc_state.mem.clone());
 
 
+    /*
     // ----------------------------------------
     // Build the minimal memory for the loop
     // ----------------------------------------
@@ -168,13 +234,55 @@ fn run(path: &str) -> Result<(), String> {
         init_mem_map0.store(MemWidth::W8, Term::const_(2147480680), i, &[]).ok();
         return Some(init_mem_map0)
     };
+    */
 
 
     // ----------------------------------------
-    // Define the state at the top of the loop
-    // and it's reachability.
+    // Concrete state is reachable
     // ----------------------------------------
-    let st_loop = |vars: &mut VarCounter, i: Term| {
+
+    // `conc_state` is reachable.
+    let p_conc = pf.tactic_admit(Prop::Reachable(ReachableProp {
+        pred: Binder::new(|_vars| {
+            StatePred {
+                state: symbolic::State::new(
+                    conc_state.pc,
+                    conc_state.regs.map(|x| x.into()),
+                    MemState::Snapshot(MemSnapshot { base: 0 }),
+                    Some(conc_state.clone()),
+                ),
+                props: Box::new([]),
+            }
+        }),
+        min_cycles: conc_state.cycle.into(),
+    }));
+
+    // Modify `p_conc` to match the premise of `p_loop`.
+    pf.tactic_reach_extend(p_conc, |rpf| {
+        rpf.rule_mem_abs_map(&all_addrs);
+    });
+
+    let init_mem_concrete = {
+        match pf.props()[p_conc.1] {
+            Prop::Reachable(ref rp) => {
+                rp.pred.inner.state.mem.clone()
+            },
+            _ => unreachable!(),
+        }
+    };
+
+    let init_mem_symbolic = |i| {
+        let mut m = init_mem_concrete.clone();
+        let i_minus_1 = Term::sub(i, 1.into());
+        // One address has the index
+        m.store(MemWidth::W8, Term::const_(0x7ffff468), i_minus_1, &[]).unwrap();
+        // One address has garbage (Really it's the index)
+        m.store(MemWidth::W8, Term::const_(0x7ffff4d0), i_minus_1, &[]).unwrap();
+        m
+    };
+
+    // Helper to build the symbolic `StatePred` for the top of the loop.
+    let st_loop = |i: Term| {
         StatePred {
             state: symbolic::State {
                 // current pc should be the address of the loop
@@ -190,8 +298,8 @@ fn run(path: &str) -> Result<(), String> {
                 // Memory in the initial state is a MemMap with all
                 // the address in memeory that would be read in the
                 // loop.
-                mem: MemState::Map(init_mem_map(i).unwrap()),
-                conc_st: Some (conc_state.clone()),
+                mem: init_mem_symbolic(i),
+                conc_st: Some(conc_state.clone()),
             },
             props: vec![].into(),
         }
@@ -201,7 +309,7 @@ fn run(path: &str) -> Result<(), String> {
     //      reach(c, st_loop(i))
     let mk_prop_reach = |i: Term, c: Term| {
         Prop::Reachable(ReachableProp {
-            pred: Binder::new(|vars| st_loop(vars, i.shift())),
+            pred: Binder::new(|vars| st_loop(i.shift())),
             min_cycles: c,
         })
     };
@@ -489,24 +597,24 @@ fn run(path: &str) -> Result<(), String> {
                     // pf.show_prop((2,0));
 
 
-            let admit4 = pf.tactic_admit(
-            Prop::Forall(
-                Binder::new(|vars| {
-                            // forall n, 
-                            let n = vars.fresh();
-                    let i = i_from_n(n);
-                            // n+1 > 0 ->
-                let h0 = Prop::Nonzero(Term::cmpa(Term::add(n.clone(),1.into()), 0.into()));
-                            // Max > 2n+2 ->
-                let h1 = Prop::Nonzero(Term::cmpa((I_MAX).into(), Term::add(Term::mull(2.into(), n.clone()), 3.into())));
-                            // Max > (max_loops - 2n ) + 1
-                            let conclusion = Prop::Nonzero(
-                                Term::cmpa(I_MAX.into(),
-                       Term::add(Term::sub(max_loops, Term::mull(n,2.into())), 1.into())));
-                (vec![h0,h1].into(), Box::new(conclusion))
-                })
-            ));
-            let _i1_no_over = pf.tactic_apply(admit4, &[n]);
+                    let admit4 = pf.tactic_admit(
+                    Prop::Forall(
+                        Binder::new(|vars| {
+                                    // forall n, 
+                                    let n = vars.fresh();
+                            let i = i_from_n(n);
+                                    // n+1 > 0 ->
+                        let h0 = Prop::Nonzero(Term::cmpa(Term::add(n.clone(),1.into()), 0.into()));
+                                    // Max > 2n+2 ->
+                        let h1 = Prop::Nonzero(Term::cmpa((I_MAX).into(), Term::add(Term::mull(2.into(), n.clone()), 3.into())));
+                                    // Max > (max_loops - 2n ) + 1
+                                    let conclusion = Prop::Nonzero(
+                                        Term::cmpa(I_MAX.into(),
+                               Term::add(Term::sub(max_loops, Term::mull(n,2.into())), 1.into())));
+                        (vec![h0,h1].into(), Box::new(conclusion))
+                        })
+                    ));
+                    let _i1_no_over = pf.tactic_apply(admit4, &[n]);
 
                     // let _i1_no_over = pf.tactic_admit(
                     //     Prop::Nonzero(Term::cmpa(I_MAX.into(),
@@ -530,17 +638,17 @@ fn run(path: &str) -> Result<(), String> {
                     // pf.show_prop((2,0));
 
 
-            let admit5 = pf.tactic_admit(
-            Prop::Forall(
-                Binder::new(|vars| {
-                let n = vars.fresh();
-                    let h0 = Prop::Nonzero(Term::cmpa((I_MAX).into(), Term::add(Term::mull(2.into(), n.clone()), 3.into())));
-                let conclusion = Prop::Nonzero(Term::cmpa(I_MAX.into(),
-                     Term::add(Term::mull(n,2.into()), 1.into())));
-                (vec![h0].into(), Box::new(conclusion))
-                })
-            ));
-            let _ind_hyp_h1 = pf.tactic_apply(admit5, &[n]);
+                    let admit5 = pf.tactic_admit(
+                    Prop::Forall(
+                        Binder::new(|vars| {
+                        let n = vars.fresh();
+                            let h0 = Prop::Nonzero(Term::cmpa((I_MAX).into(), Term::add(Term::mull(2.into(), n.clone()), 3.into())));
+                        let conclusion = Prop::Nonzero(Term::cmpa(I_MAX.into(),
+                             Term::add(Term::mull(n,2.into()), 1.into())));
+                        (vec![h0].into(), Box::new(conclusion))
+                        })
+                    ));
+                    let _ind_hyp_h1 = pf.tactic_apply(admit5, &[n]);
 
                     // println!("============ Context");
                     // pf.show_context();
@@ -571,24 +679,24 @@ fn run(path: &str) -> Result<(), String> {
                     println!("==== ADMIT: \n\tforall i, forall b, \n\treach(b + 5460, st_loop(i_sub_2 + 2)) ->\n\treach(b + 5460, st_loop(i)");
                     pf.show_prop((3,6));
 
-            let admit6 = pf.tactic_admit(
-            Prop::Forall(
-                Binder::new(|vars| {
-                let nn = vars.fresh();
-                            let nn_plus_1 = Term::add(nn, 1.into());
-                let bb = vars.fresh();
-                            // Let i := max - 2n in 
-                    let is = i_from_n(nn);
-                    // Let i_sub_22 := max - 2 (n + 1) in
-                    let is_sub_2 = i_from_n(nn_plus_1);
-                    // reach(b + 5460, st_loop(i_sub_2 + 2)) ->
-                    let h0 = mk_prop_reach(Term::add(is_sub_2,2.into()), Term::add(bb,5460.into()));
-                            // reach(b + 5460, st_loop(i)
-                let conclusion = mk_prop_reach(is, Term::add(bb,5460.into())) ;
-                (vec![h0].into(), Box::new(conclusion))
-                })
-            ));
-            let _ind_hyp_h0 = pf.tactic_apply(admit6, &[n, b]);
+                    let admit6 = pf.tactic_admit(
+                    Prop::Forall(
+                        Binder::new(|vars| {
+                        let nn = vars.fresh();
+                                    let nn_plus_1 = Term::add(nn, 1.into());
+                        let bb = vars.fresh();
+                                    // Let i := max - 2n in 
+                            let is = i_from_n(nn);
+                            // Let i_sub_22 := max - 2 (n + 1) in
+                            let is_sub_2 = i_from_n(nn_plus_1);
+                            // reach(b + 5460, st_loop(i_sub_2 + 2)) ->
+                            let h0 = mk_prop_reach(Term::add(is_sub_2,2.into()), Term::add(bb,5460.into()));
+                                    // reach(b + 5460, st_loop(i)
+                        let conclusion = mk_prop_reach(is, Term::add(bb,5460.into())) ;
+                        (vec![h0].into(), Box::new(conclusion))
+                        })
+                    ));
+                    let _ind_hyp_h0 = pf.tactic_apply(admit6, &[n, b]);
 
                     // let _ind_hyp_h0 = pf.tactic_admit(  mk_prop_reach(i, Term::add(b,5460.into())));
 
@@ -610,22 +718,6 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
 
     eprintln!("\n#Prove p_exec");
-    // `conc_state` is reachable.
-    let p_conc = pf.tactic_admit(Prop::Reachable(ReachableProp {
-        pred: Binder::new(|_vars| {
-            StatePred {
-                state: symbolic::State {
-                    pc: conc_state.pc,
-                    regs: conc_state.regs.map(|x| x.into()),
-                    mem: MemState::Map(init_mem_map(conc_state.regs[8].into()).unwrap()),
-                    conc_st: Some (conc_state.clone()),
-                },
-                props: Box::new([]),
-            }
-        }),
-        min_cycles: conc_state.cycle.into(),
-    }));
-
 
 
     // Combine `p_conc` and `p_loop` to prove that the loop's final state is reachable.
