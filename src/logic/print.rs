@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::rc::Rc;
-use crate::BinOp;
+use crate::{BinOp, Addr};
 use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder, VarCounter};
+use crate::symbolic::{MemState, MemConcrete, MemMap, MemSnapshot, MemLog, MemMulti};
 
 
 
@@ -239,8 +240,8 @@ impl Print for StatePred {
             write!(f, " /\\ {}", p.display(prop))?;
         }
 
-        // Skip printing the memory state for now
-        write!(f, " /\\ MEM")?;
+        write!(f, " /\\ ")?;
+        self.state.mem.print(p, f)?;
 
         Ok(())
     }
@@ -269,125 +270,94 @@ impl<'a, T: Print> Print for PrintBinder<'a, T> {
 }
 
 
-/*
-/// Helper for displaying the "forall x," or "exists y," part of a `Binder`.  Note that the
-/// `Display` impl prints only the variable bindings, not the inner value.
-struct DisplayBinder<'a> {
-    vars: &'a VarCounter,
-    mode: DisplayBinderMode,
-}
-
-enum DisplayBinderMode {
-    Forall,
-    Exists,
-}
-
-impl<'a> DisplayBinder<'a> {
-    fn forall<T>(b: &'a Binder<T>) -> DisplayBinder<'a> {
-        DisplayBinder {
-            vars: &b.vars,
-            mode: DisplayBinderMode::Forall,
-        }
-    }
-
-    fn exists<T>(b: &'a Binder<T>) -> DisplayBinder<'a> {
-        DisplayBinder {
-            vars: &b.vars,
-            mode: DisplayBinderMode::Exists,
-        }
-    }
-}
-
-impl fmt::Display for DisplayBinderMode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Print for MemState {
+    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            DisplayBinderMode::Forall => write!(f, "forall"),
-            DisplayBinderMode::Exists => write!(f, "exists"),
+            MemState::Concrete(ref m) => m.print(p, f),
+            MemState::Map(ref m) => m.print(p, f),
+            MemState::Snapshot(ref m) => m.print(p, f),
+            MemState::Log(ref m) => m.print(p, f),
+            MemState::Multi(ref m) => m.print(p, f),
         }
     }
 }
 
-impl<'a> fmt::Display for DisplayBinder<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.vars.len() {
-            0 => Ok(()),
-            1 => {
-                let v = VarId::new(self.vars.scope(), 0);
-                write!(f, "{} {}, ", self.mode, v)
-            },
-            n => {
-                let v0 = VarId::new(self.vars.scope(), 0);
-                let vn = VarId::new(self.vars.scope(), n as u32 - 1);
-                write!(f, "{} {} .. {}, ", self.mode, v0, vn)
-            },
-        }
-    }
-}
-
-
-impl fmt::Display for StepProp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f, "{{{}}} ->({}) {{{}}}",
-            DisplayBinderStatePred(&self.pre),
-            self.min_cycles,
-            DisplayBinderStatePred(&self.post),
-        )
-    }
-}
-
-struct DisplayBinderStatePred<'a>(&'a Binder<StatePred>);
-
-impl fmt::Display for DisplayBinderStatePred<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", DisplayBinder::exists(self.0))?;
-        write!(f, "pc = {}", self.0.inner.state.pc)?;
-
-        let mut vars_mentioned_in_props = HashSet::new();
-        for p in &self.0.inner.props {
-            p.for_each_var(&mut |v| -> Option<()> {
-                vars_mentioned_in_props.insert(v);
-                None
-            });
-        }
-        let exists_scope = self.0.vars.scope();
-        let has_constrained_var = |t: &Term| {
-            t.for_each_var(&mut |v| {
-                if vars_mentioned_in_props.contains(&v) || v.scope() != exists_scope {
-                    Some(())
-                } else {
-                    None
-                }
-            }).is_some()
-        };
-
-        for (i, t) in self.0.inner.state.regs.iter().enumerate() {
-            if let Some(v) = t.as_var() {
-                if v.scope() == exists_scope && !vars_mentioned_in_props.contains(&v) {
-                    continue;
-                }
+impl Print for MemConcrete {
+    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut kvs = self.m.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>();
+        kvs.sort();
+        for (i, (k, v)) in kvs.into_iter().enumerate() {
+            if i > 0 {
+                write!(f, " /\\ ")?;
             }
-            write!(f, " /\\ r{} = {}", i, t)?;
+            write!(f, "[{:x}] = {}", k, v)?;
         }
-
-        for p in &self.0.inner.props {
-            write!(f, " /\\ {}", p)?;
-        }
-
-        // Skip printing the memory state for now
-        write!(f, " /\\ MEM")?;
-
         Ok(())
     }
 }
 
-impl fmt::Display for ReachableProp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f, "{{init}} ->({}) {{{}}}",
-            self.min_cycles,
-            DisplayBinderStatePred(&self.pred),
-        )
+impl Print for MemMap {
+    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut first = true;
+        let mut emit = |addr: Addr, size: u8, value: Term, base: u8| -> fmt::Result {
+            if first {
+                first = false;
+            } else {
+                write!(f, " /\\ ")?;
+            }
+            if size == 1 {
+                write!(f, "[{:x}] = ", addr)?;
+            } else {
+                write!(f, "[{:x},+{}] = ", addr, size)?;
+            }
+            if base == 0 {
+                value.print(p, f)?;
+            } else {
+                write!(f, "(")?;
+                value.print(p, f)?;
+                write!(f, ")>>{}", base)?;
+            }
+            Ok(())
+        };
+
+        let mut addr = 0;
+        let mut size = 0;
+        let mut value = Term::const_(0);
+        let mut base = 0;
+
+        for (&k, &(v, b)) in self.m.iter() {
+            if k == addr + size as Addr && v == value && b == base + size {
+                size += 1;
+            } else {
+                emit(addr, size, value, base)?;
+                addr = k;
+                size = 1;
+                value = v;
+                base = b;
+            }
+        }
+
+        if size > 0 {
+            emit(addr, size, value, base)?;
+        }
+        Ok(())
     }
 }
-*/
+
+impl Print for MemSnapshot {
+    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "MemSnapshot @{:x}", self.base)
+    }
+}
+
+impl Print for MemLog {
+    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "MemLog [{} entries]", self.l.len())
+    }
+}
+
+impl Print for MemMulti {
+    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "MemMulti [{} parts]", self.conc.len() + self.objs.len() + self.sym.len())
+    }
+}
