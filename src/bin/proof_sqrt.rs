@@ -25,7 +25,8 @@ use sym_proof::symbolic::{self, MemState, MemSnapshot, Memory, MemMap, MemConcre
 use sym_proof::tactics::{Tactics, ReachTactics};
 use witness_checker::micro_ram::types::Advice;
 
-const I_MAX:u64 = 4_000_000_000;
+const I_MAX: u64 = 4_000_000_000;
+const N_MAX: u64 = I_MAX / 2;
 
 fn run(path: &str) -> Result<(), String> {
     let exec = import::load_exec(path);
@@ -189,52 +190,82 @@ fn run(path: &str) -> Result<(), String> {
     MemSnapshot::init_data(conc_state.mem.clone());
 
 
-    /*
     // ----------------------------------------
-    // Build the minimal memory for the loop
+    // Admit some arithmetic lemmas
     // ----------------------------------------
-    eprintln!("=== Build the symbolic memory.");
-    let mut load_mem  : HashSet<(Addr, MemWidth, Word)> = HashSet::new();
 
-    // Do a step to move away from the label
-    let instr = prog[conc_state.pc];
-    let cyc = conc_state.cycle;
-    // For some reason the cycle is off by one wrt advice
-    let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
-    conc_state.step(instr, adv); //we assume/know this step is not a memory step.
+    // Z3 prologue:
+    // (declare-const a (_ BitVec 64))
+    // (declare-const b (_ BitVec 64))
+    // (declare-const c (_ BitVec 64))
+    // (declare-const d (_ BitVec 64))
+    // (declare-const n (_ BitVec 64))
+    // (declare-const m (_ BitVec 64))
 
-    // The run until the label is found again
-    while conc_state.pc != loop_addr {
-        let instr = prog[conc_state.pc];
-        let cyc = conc_state.cycle;
-        // For some reason the cycle is off by one wrt advice
-        let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
-        let pc = conc_state.pc;
-        conc_state.step(instr, adv);
+    // Z3 epilogue:
+    // (check-sat)
+    // (get-model)
 
-        match instr.opcode {
-            Opcode::Load(w) => {
-                let addr = conc_state.operand_value(instr.op2);
-                load_mem.insert((addr, w, pc));
-            },
-            _ => ()
-        }
-    }
+    // To check each lemma, append the Z3 prologue, the SMTlib code for the lemma, and the Z3
+    // epilogue.  It should report `unsat`.
 
-    let mut init_mem_map  = |i| {
-        let mut init_mem_map0 = MemMap::new();
-        for &(addr, ww, pc) in load_mem.iter(){
-            let val = mem_load(&conc_state.mem, ww, addr);
-            init_mem_map0.store(ww, Term::const_(addr), Term::const_(val), &[]).ok();
-        }
+    println!("==== ADMIT: forall n, 2n != 1");
+    // (assert (not (not (= (bvmul (_ bv2 64) n) (_ bv1 64)))))
+    let arith_2n_ne_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+        let n = vars.fresh();
+        // (2 * n == 1) == 0
+        let a = Term::mull(2.into(), n);
+        let eq = Term::cmpe(1.into(), a);
+        let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
+        (vec![].into(), Box::new(ne))
+    })));
 
-        // One address has the index
-        init_mem_map0.store(MemWidth::W8, Term::const_(2147480784), i, &[]).ok();
-        // One address has garbage (Really it's the index)
-        init_mem_map0.store(MemWidth::W8, Term::const_(2147480680), i, &[]).ok();
-        return Some(init_mem_map0)
-    };
-    */
+    println!("==== ADMIT: forall m n, m < 2^63  ->  n < m  ->  2n + 5 != 1");
+    // (assert (bvugt #x7fffffffffffffff m))
+    // (assert (bvugt m n))
+    // (assert (not (not (= (bvadd (bvmul (_ bv2 64) n) (_ bv5 64)) (_ bv1 64)))))
+    let arith_2n_plus_5_ne_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+        let m = vars.fresh();
+        let n = vars.fresh();
+        // m < 2^63
+        let m_limit = Prop::Nonzero(Term::cmpa((1 << 63).into(), m));
+        // n < m
+        let n_limit = Prop::Nonzero(Term::cmpa(m, n));
+        // (2 * n + 5 == 1) == 0
+        let a = Term::add(Term::mull(2.into(), n), 5.into());
+        let eq = Term::cmpe(1.into(), a);
+        let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
+        (vec![m_limit, n_limit].into(), Box::new(ne))
+    })));
+
+    println!("==== ADMIT: forall a b, 0 < a  ->  a < b  ->  a - 1 < b");
+    // (assert (bvugt a (_ bv0 64)))
+    // (assert (bvugt b a))
+    // (assert (not (bvugt b (bvsub a (_ bv1 64)))))
+    let arith_lt_sub_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+        let a = vars.fresh();
+        let b = vars.fresh();
+        // 0 < a
+        let low = Prop::Nonzero(Term::cmpa(a, 0.into()));
+        // a < b
+        let high = Prop::Nonzero(Term::cmpa(b, a));
+        // a - 1 < b
+        let concl = Prop::Nonzero(Term::cmpa(b, Term::sub(a, 1.into())));
+        (vec![low, high].into(), Box::new(concl))
+    })));
+
+
+    println!("==== ADMIT: forall a b c, (a + b) + c == a + (b + c)");
+    // (assert (not (= (bvadd (bvadd a b) c) (bvadd a (bvadd b c)))))
+    let arith_add_assoc = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+        let a = vars.fresh();
+        let b = vars.fresh();
+        let c = vars.fresh();
+        let l = Term::add(Term::add(a, b), c);
+        let r = Term::add(a, Term::add(b, c));
+        let concl = Prop::Nonzero(Term::cmpe(l, r));
+        (vec![].into(), Box::new(concl))
+    })));
 
 
     // ----------------------------------------
@@ -318,68 +349,46 @@ fn run(path: &str) -> Result<(), String> {
     // Prove a double iteration (twice around the loop)
     // ----------------------------------------
 
+    let start_i = 4;
+
     // We first prove a lemma of the form:
-    //      forall b i,
-    //          i > 0 ->
-    //          I_MAX > i + 1 ->
-    //          reach(b, st_loop(i)) ->
-    //          reach(b + 5460, st_loop(i + 2))
+    //      forall b n,
+    //          n < N_MAX ->
+    //          reach(b, st_loop(2n + start_i)) ->
+    //          reach(b + 5460, st_loop(2(n+1) + start_i))
     eprintln!("\n# Prove p_iter");
     let p_iter = pf.tactic_forall_intro(
         |vars| {
-            // forall b i, 
+            // forall b n, 
             let b = vars.fresh();
-            let i = vars.fresh();
+            let n = vars.fresh();
+            let i = Term::add(Term::mull(2.into(), n), start_i.into());
             (vec![
-                // i > 1 -> 
-                Prop::Nonzero(Term::cmpa(i.clone(), 1.into())),
-                // MAX > i+1 -> 
-                Prop::Nonzero(Term::cmpa((I_MAX).into(),Term::add(1.into(), i.clone()))),
-                // reach(c, st_loop(i)) -> 
+                // n < N_MAX ->
+                Prop::Nonzero(Term::cmpa(N_MAX.into(), n)),
+                // reach(b, st_loop(2n + start_i)) -> 
                 mk_prop_reach(i, b.clone()),
-            ], i)
+            ], n)
         },
-        |pf, i| {
+        |pf, n| {
             // Premises:
-            // i > 0
-            let i_gt_1 = (1,0);
-            // I_MAX > i + 1
-            let i1_bound = (1,1);
-            // reach(b, st_loop(i))
-            let p_reach = (1, 2);
+            // n < N_MAX
+            // reach(b, st_loop(2n + start_i))
+            let p_reach = (1, 1);
 
-            // Prove: i != 0
-            println!("==== ADMIT: \n\t forall i, i > 1 -> ((1 == i) == 0)");
-            let admit1 = pf.tactic_admit(
-                Prop::Forall(
-                    Binder::new(|vars| {
-                        let n = vars.fresh();
-                        let p = Prop::Nonzero(Term::cmpa(n.clone(), 1.into()));
-                        let q = Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), n.clone()), 0.into()));
-                        (vec![p].into(), Box::new(q))
-                    })
-                ));
-            let _i_not_0 = pf.tactic_apply(admit1, &[i]);
+            pf.rule_trivial();
 
-            // Prove: i + 1 != 0
-            println!("==== ADMIT: \n\t i > 1 -> MAX > i+1 -> ((1 == (i + 1)) == 0)");
-            //pf.show_prop(i_gt_1);
-            //pf.show_prop(i1_bound);
-            let admit2 = pf.tactic_admit(
-                Prop::Forall(
-                    Binder::new(|vars| {
-                        let n = vars.fresh();
-                        let h0 = Prop::Nonzero(Term::cmpa(n.clone(), 1.into()));
-                        let h1 = Prop::Nonzero(Term::cmpa((I_MAX).into(), Term::add(n.clone(), 1.into())));
-                        let conclusion = Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), Term::add(n.clone(), 1.into())), 0.into()));
-                        (vec![h0,h1].into(), Box::new(conclusion))
-                    })
-                ));            
-            let i1_not_0 = pf.tactic_apply(admit2, &[i]);
+            // Note: these lemmas must be adjusted when changing `start_i`.
+            let arith_2n_ne_1 = pf.tactic_clone(arith_2n_ne_1);
+            let _i_ne_1 = pf.tactic_apply(arith_2n_ne_1, &[Term::add(n, 2.into())]);
+
+            let arith_2n_plus_5_ne_1 = pf.tactic_clone(arith_2n_plus_5_ne_1);
+            let _i_plus_1_ne_1 = pf.tactic_apply(arith_2n_plus_5_ne_1, &[N_MAX.into(), n]);
 
             // Extend `p_reach` with two iterations worth of steps.
-            let (p_reach, _i1_not_0) = pf.tactic_swap(p_reach, i1_not_0);
+            let (p_reach, _i_plus_1_ne_1) = pf.tactic_swap(p_reach, _i_plus_1_ne_1);
             pf.tactic_reach_extend(p_reach, |rpf| {
+                let n = n.shift();
                 // rpf.show_state();
 
                 // Define the proof for one single loop iteration.  The counter `n` is used to
@@ -399,6 +408,7 @@ fn run(path: &str) -> Result<(), String> {
                     eprintln!("\t=== {}. Replace the symbolic comparison with concrete value.
                                (i==1) -> 0. pc {}, cycle {:?}", n,
                               rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
+                    rpf.show_context();
                     rpf.rule_rewrite_reg(32, Term::const_(0));
                     *n += 1;
 
@@ -451,28 +461,9 @@ fn run(path: &str) -> Result<(), String> {
                 one_loop_proof(&mut steps_counter);
                 println!("=== Prove the second loop");
                 one_loop_proof(&mut steps_counter);
-
             });
-
         },
     );
-
-    {
-        eprintln!("p_iter prop:");
-        let prop = &pf.props()[p_iter.1];
-        let b = match *prop {
-            Prop::Forall(ref b) => b,
-            _ => panic!(),
-        };
-
-        for (i, p) in b.inner.0.iter().enumerate() {
-            eprintln!("hyp.{}: {}", i, pf.print_adj(1, p));
-        }
-        eprintln!("concl: {}", pf.print_adj(1, &b.inner.1));
-    }
-
-
-
 
 
     // ----------------------------------------
@@ -483,57 +474,43 @@ fn run(path: &str) -> Result<(), String> {
     // We are proving the following statement:
     //
     //      forall n,
-    //          Max > 2n + 1 ->
-    //          let i := Max - 2n in
-    //          (i > 1) ->
-    //          (Max > i + 1) ->
+    //          n < N_MAX ->
     //          forall b,
-    //              reach(b, st_loop(i) ->
-    //              reach(b + n * 5460, st_loop(max))
+    //              reach(b, st_loop(start_i)) ->
+    //              reach(b + n * 5460, st_loop(2n + start_i))
     //
     // We separate the binders for `b` and `n` because `tactic_induction` expects to see only a
     // single bound variable (`n`) in `Hsucc`.
 
-    // End of the execution is Max - 1, to avoid trouble at the baoundary
-    let target_below_max = 2; 
-    let max_loops = Term::sub(I_MAX.into(),target_below_max.into());
-    // Write i in terms of n (n increases, i decreases)
-    let i_from_n = |n| (Term::sub(max_loops,Term::mull(2.into(), n)));
-
     eprintln!("\n#prove p_loop");
     let p_loop = pf.tactic_induction(
         Prop::Forall(Binder::new(|vars| {
-            //      forall n,
+            // forall n,
             let n = vars.fresh();
-            //          Max > 2n + 1 ->
-            let p0 = Prop::Nonzero(Term::cmpa(I_MAX.into(), Term::add(Term::mull(n, 2.into()), 1.into())));
-            //          let i := Max - 2n in
-            let i:Term = i_from_n(n);
-            //          (i > 1) ->
-            let p1 = Prop::Nonzero(Term::cmpa(i, 1.into()));
-            //          (Max > i + 1) ->
-            let p2 = Prop::Nonzero(Term::cmpa(I_MAX.into(), Term::add(i,1.into())));
+            // n < N_MAX ->
+            let p0 = Prop::Nonzero(Term::cmpa(N_MAX.into(), n));
+
             let q = Prop::Forall(Binder::new(|vars| {
                 let n = n.shift();
-                let i:Term = i_from_n(n);
-                //      forall b,
+                // forall b,
                 let b = vars.fresh();
-                //          reach(st_loop(i), b) ->
-                let p = mk_prop_reach(i, b);
-                //          reach(st_loop(max), b + n * 5460)
-                let q = mk_prop_reach(max_loops, Term::add(b, Term::mull(n, 5460.into())));
+                // reach(b, st_loop(start_i)) ->
+                let p = mk_prop_reach(start_i.into(), b);
+                // reach(b + n * 5460, st_loop(2n + start_i))
+                let i = Term::add(Term::mull(2.into(), n), start_i.into());
+                let cyc = Term::add(b, Term::mull(n, 5460.into()));
+                let q = mk_prop_reach(i, cyc);
                 (vec![p].into(), Box::new(q))
             }));
-            (vec![p0,p1,p2].into(), Box::new(q))
+            (vec![p0].into(), Box::new(q))
         })),
+
+        // Base case
         |pf| {
-            // println!("==== Context");
-            // pf.show_context();
-            // println!("==== END Context");
             pf.tactic_forall_intro(
                 |vars| {
                     let b = vars.fresh();
-                    let p = mk_prop_reach(max_loops, b);
+                    let p = mk_prop_reach(start_i.into(), b);
                     (vec![p], b)
                 },
                 |_pf, _b| {
@@ -541,171 +518,50 @@ fn run(path: &str) -> Result<(), String> {
                 },
             );
         },
+
+        // Inductive case
         |pf, n| {
-            eprintln!(" -- context for inductive case: --");
-            pf.show_context();
-            eprintln!(" -- end of context --");
             pf.tactic_forall_intro(
                 |vars| {
-                    let n = n.shift();
-                    let n_plus_1 = Term::add(n, 1.into());
-                    // Let i+2 := max - 2n
-                    let i_plus_2 = i_from_n(n_plus_1);
-
                     let b = vars.fresh();
-                    let p = mk_prop_reach(i_plus_2, b);
+                    let p = mk_prop_reach(start_i.into(), b);
                     (vec![p], b)
                 },
                 |pf, b| {
-
-
-                    // println!("============ Context");
-                    // pf.show_context();
-                    // println!("============ END Context");
                     let n = n.shift();
-                    let n_plus_1 = Term::add(n, 1.into());
+                    let p_n_plus_1_limit = (1, 0);
+                    let p_ind_hyp = (1, 1);
 
-                    // Let i := max - 2n
-                    let i = i_from_n(n);
-                    // Let i_sub_22 := max - 2 (n + 1)
-                    let i_sub_2 = i_from_n(n_plus_1);
+                    // Show `n < N_MAX`
+                    let _p_n_plus_1_limit = pf.tactic_clone(p_n_plus_1_limit);
+                    let arith_lt_sub_1 = pf.tactic_clone(arith_lt_sub_1);
+                    let _n_limit = pf.tactic_apply(arith_lt_sub_1,
+                        &[Term::add(n, 1.into()), N_MAX.into()]);
 
-                    // (Max >u 2n + 3) -> (i > 1)
-                    println!("==== ADMIT: \n\tforall n, (Max >u 2n + 3) -> (i > 1)");
-                    // The hypothesis:
-                    // pf.show_prop((2,0));
+                    // Use the induction hypothesis to show that iteration `n` is reachable.
+                    let p_ind_hyp = pf.tactic_clone(p_ind_hyp);
+                    let p_ind_hyp1 = pf.tactic_apply0(p_ind_hyp);
+                    let _p_ind_hyp2 = pf.tactic_apply(p_ind_hyp1, &[b]);
 
+                    //println!("============ Context (inductive case):");
+                    //pf.show_context();
+                    //println!("============ END Context");
 
-                    let admit3 = pf.tactic_admit(
-                        Prop::Forall(
-                            Binder::new(|vars| {
-                                let n = vars.fresh();
-                                let i = i_from_n(n);
-                                let h0 = Prop::Nonzero(Term::cmpa((I_MAX).into(), Term::add(Term::mull(2.into(), n.clone()), 3.into())));
-                                let conclusion = Prop::Nonzero(Term::cmpa(i.into(), 1.into()));
-                                (vec![h0].into(), Box::new(conclusion))
-                            })
-                        ));
-                    let _i_gt_1 = pf.tactic_apply(admit3, &[n]);
-
-                    // forall n,
-                    // n+1 > 0 ->
-                    // Max > 2n+3 ->
-                    // Max > (max_loops - 2n ) + 1
-                    println!("==== ADMIT: \n\tn+1 > 0 ->\n\tMax > 2n+2 -> \n\tMax > (max_loops - 2n ) + 1");
-                    // pf.show_prop((1,0));
-                    // pf.show_prop((2,0));
-
-
-                    let admit4 = pf.tactic_admit(
-                    Prop::Forall(
-                        Binder::new(|vars| {
-                                    // forall n, 
-                                    let n = vars.fresh();
-                            let i = i_from_n(n);
-                                    // n+1 > 0 ->
-                        let h0 = Prop::Nonzero(Term::cmpa(Term::add(n.clone(),1.into()), 0.into()));
-                                    // Max > 2n+2 ->
-                        let h1 = Prop::Nonzero(Term::cmpa((I_MAX).into(), Term::add(Term::mull(2.into(), n.clone()), 3.into())));
-                                    // Max > (max_loops - 2n ) + 1
-                                    let conclusion = Prop::Nonzero(
-                                        Term::cmpa(I_MAX.into(),
-                               Term::add(Term::sub(max_loops, Term::mull(n,2.into())), 1.into())));
-                        (vec![h0,h1].into(), Box::new(conclusion))
-                        })
-                    ));
-                    let _i1_no_over = pf.tactic_apply(admit4, &[n]);
-
-                    // let _i1_no_over = pf.tactic_admit(
-                    //     Prop::Nonzero(Term::cmpa(I_MAX.into(),
-                    //                              Term::add(Term::sub(max_loops, Term::mull(n,2.into())), 1.into())))
-                    // );
-
-                    println!("==== Clone P_iter");
+                    // Use `p_iter` to show that iteration `n+1` is reachable.
                     let p_iter = pf.tactic_clone(p_iter);
+                    let cyc_n = Term::add(b, Term::mull(n, 5460.into()));
+                    let p_final = pf.tactic_apply(p_iter, &[cyc_n, n]);
 
-                    // println!("============ Context");
-                    // pf.show_context();
-                    // println!("============ END Context");
-
-                    println!("==== Apply P_iter to {:?}", i_sub_2);
-                    let _p_first = pf.tactic_apply(p_iter, &[b, i_sub_2]);
-
-
-                    // (Max >u (2n + 3)) ->
-                    // (Max >u (2n + 1))
-                    println!("==== ADMIT: \n\t(Max >u (2n + 3)) ->\n\t(Max >u (2n + 1))");
-                    // pf.show_prop((2,0));
-
-
-                    let admit5 = pf.tactic_admit(
-                    Prop::Forall(
-                        Binder::new(|vars| {
-                        let n = vars.fresh();
-                            let h0 = Prop::Nonzero(Term::cmpa((I_MAX).into(), Term::add(Term::mull(2.into(), n.clone()), 3.into())));
-                        let conclusion = Prop::Nonzero(Term::cmpa(I_MAX.into(),
-                             Term::add(Term::mull(n,2.into()), 1.into())));
-                        (vec![h0].into(), Box::new(conclusion))
-                        })
-                    ));
-                    let _ind_hyp_h1 = pf.tactic_apply(admit5, &[n]);
-
-                    // println!("============ Context");
-                    // pf.show_context();
-                    // println!("============ END Context");
-
-                    println!("==== Apply induction hypothesis, first bind");
-                    let p_ind = pf.tactic_clone((1, 1));
-                    let p_rest = pf.tactic_apply0(p_ind);
-
-
-                    let expected_cycles =
+                    // Rewrite the cycle count using associativity.
+                    let arith_add_assoc = pf.tactic_clone(arith_add_assoc);
+                    let cyc_eq = pf.tactic_apply(arith_add_assoc,
+                        &[b, Term::mull(n, 5460.into()), 5460.into()]);
+                    let cyc_n_plus_1 =
                         Term::add(b, Term::add(Term::mull(n, 5460.into()), 5460.into()));
+                    pf.tactic_reach_shrink(p_final, cyc_n_plus_1);
 
-                    // (b + (n*5460 + 5460)) == (b + 5460) + n*5460
-                    println!("==== ADMIT: (b + (n*5460 + 5460)) == (b + 5460) + n*5460");
-                    pf.tactic_admit(Prop::Nonzero(Term::cmpe(
-                        Term::add(Term::add(b, 5460.into()), Term::mull(n, 5460.into())),
-                        expected_cycles,
-                    )));
-
-
-                    println!("============ Context");
-                    pf.show_context();
-                    println!("============ END Context");
-
-                    // reach(b + 5460, st_loop(i_sub_2 + 2)) ->
-                    // reach(b + 5460, st_loop(i)
-                    println!("==== ADMIT: \n\tforall i, forall b, \n\treach(b + 5460, st_loop(i_sub_2 + 2)) ->\n\treach(b + 5460, st_loop(i)");
-                    pf.show_prop((3,6));
-
-                    let admit6 = pf.tactic_admit(
-                    Prop::Forall(
-                        Binder::new(|vars| {
-                        let nn = vars.fresh();
-                                    let nn_plus_1 = Term::add(nn, 1.into());
-                        let bb = vars.fresh();
-                                    // Let i := max - 2n in 
-                            let is = i_from_n(nn);
-                            // Let i_sub_22 := max - 2 (n + 1) in
-                            let is_sub_2 = i_from_n(nn_plus_1);
-                            // reach(b + 5460, st_loop(i_sub_2 + 2)) ->
-                            let h0 = mk_prop_reach(Term::add(is_sub_2,2.into()), Term::add(bb,5460.into()));
-                                    // reach(b + 5460, st_loop(i)
-                        let conclusion = mk_prop_reach(is, Term::add(bb,5460.into())) ;
-                        (vec![h0].into(), Box::new(conclusion))
-                        })
-                    ));
-                    let _ind_hyp_h0 = pf.tactic_apply(admit6, &[n, b]);
-
-                    // let _ind_hyp_h0 = pf.tactic_admit(  mk_prop_reach(i, Term::add(b,5460.into())));
-
-                    println!("==== Apply induction hypothesis, second bind");
-                    let p_final = pf.tactic_apply(p_rest, &[Term::add(b, 5460.into())]);
-
-
-                    println!("==== Shrink");
-                    pf.tactic_reach_shrink(p_final, expected_cycles);
+                    // Move `p_final` to the end, so it becomes the conclusion of the forall.
+                    pf.tactic_swap(cyc_eq, p_final);
                 },
             );
         },
@@ -718,37 +574,22 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
 
     eprintln!("\n#Prove p_exec");
+    pf.show_context();
 
-
-    // Combine `p_conc` and `p_loop` to prove that the loop's final state is reachable.
-    println!("==== Apply p_loop 1");
-    // Initial n value:
-    let initial_n = {
-        // current value of r8
-        let r8_val = conc_state.regs[8];
-        let diff = I_MAX - r8_val - target_below_max;
-        if diff%2 != 0{
-            eprintln!("=== Error, Max-r[8] should be even, but r[8]={}, Max={}", r8_val, I_MAX)
-        }
-        diff/2
-    };
-    println!("==== Initial n = {}", initial_n);
-    let p_loop_n = pf.tactic_apply(p_loop, &[initial_n.into()]);
+    // Apply `p_loop` to `p_conc`.
     pf.rule_trivial();
-    println!("==== Apply p_loop 2");
-    let p_loop_n = pf.tactic_apply0(p_loop_n);
-    println!("==== Apply p_loop_n");
+    let p_loop1 = pf.tactic_apply(p_loop, &[(N_MAX - 1).into()]);
+    let p_loop2 = pf.tactic_apply0(p_loop1);
+    let p_exec = pf.tactic_apply(p_loop2, &[conc_state.cycle.into()]);
 
-    // println!("============ Context");
-    // pf.show_context();
-    // println!("============ END Context");
-    let p_exec = pf.tactic_apply(p_loop_n, &[conc_state.cycle.into()]);
-
+    // Shrink the cycle count to the lower bound we intend to reveal to the verifier.
+    pf.tactic_reach_shrink(p_exec, 10_000_000_000_000.into());
 
     println!("\n============");
     println!("Final theorem:\n{}", pf.print(&pf.props()[p_exec.1]));
     println!("============\n");
     println!("Ok: Proof verified");
+
     Ok(())
 }
 
