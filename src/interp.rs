@@ -35,6 +35,7 @@ define_numbered_enum! {
         MemAbsConcrete,
         MemAbsMap,
         MemAbsLog,
+        RewriteMem,
     }
 }
 
@@ -165,6 +166,12 @@ pub fn playback_reach_proof(rpf: &mut ReachProof, ps: impl PlaybackStreamTag) {
             ReachRule::MemAbsLog => {
                 let addrs = ps.playback::<Vec<(Addr, MemWidth)>>();
                 rpf.rule_mem_abs_log(&addrs);
+            },
+            ReachRule::RewriteMem => {
+                let w = ps.playback::<MemWidth>();
+                let addr = ps.playback::<Term>();
+                let new = ps.playback::<Term>();
+                rpf.rule_rewrite_mem(w, addr, new);
             },
         }
     }

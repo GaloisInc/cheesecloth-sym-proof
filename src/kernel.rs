@@ -1016,4 +1016,16 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         let new = MemState::Log(MemLog::new());
         self.mem_abs_common(new, addrs);
     }
+
+    /// Rewrite the value at `addr` in memory to `new`.  Requires the premise `old == new` to be
+    /// available in the context.
+    pub fn rule_rewrite_mem(&mut self, w: MemWidth, addr: Term, new: Term) {
+        record!(ReachRule::RewriteMem, addr, new);
+        let old = self.mem_load(w, addr);
+        self.require_premise_one_of([
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpe(old, new))),
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpe(new, old))),
+        ]);
+        self.mem_store(w, addr, new);
+    }
 }
