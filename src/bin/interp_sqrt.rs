@@ -10,18 +10,17 @@
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
 #![cfg_attr(feature = "deny_warnings", deny(warnings))]
-use std::collections::HashMap;
 use std::env;
 use env_logger;
 use log::trace;
-use sym_proof::Addr;
 use sym_proof::advice;
 use sym_proof::interp;
 use sym_proof::kernel::Proof;
-use sym_proof::micro_ram::Program;
+use sym_proof::logic::{Term, Prop, Binder, ReachableProp, StatePred};
+use sym_proof::micro_ram::{self, Program};
 use sym_proof::micro_ram::import;
+use sym_proof::symbolic::{self, MemState, MemSnapshot};
 use sym_proof::tactics::Tactics;
-use witness_checker::micro_ram::types::Advice;
 
 fn run(path: &str) -> Result<(), String> {
     let exec = import::load_exec(path);
@@ -33,79 +32,20 @@ fn run(path: &str) -> Result<(), String> {
     eprintln!("loaded memory: {} words", init_state.mem.len());
     trace!("initial regs = {:?}", init_state.regs);
 
-    // Load advice
-    let mut advs:HashMap<u64, u64> = HashMap::new();
-    // Iterate through all the advices (i.e. MemOps, Stutter, Advice)
-    // and only keep the `Advice` ones.
-    for (key, advice_vec) in exec.advice.iter() {
-        for advice in advice_vec {
-            if let Advice::Advise { advise } = advice {
-                // Extract the value from the Advise variant
-                // and store it in the new HashMap
-		advs.insert(*key, *advise);
-            }
-        }
+    // Load the concrete state from disk so we don't need to rerun the concrete prefix.
+    #[cfg(not(feature = "playback_concrete_state"))] {
+        compile_error!("can't run proof interpreter without playback_concrete_state");
     }
-    eprintln!("loaded advice");
-    
-    // ----------------------------------------
-    // Run the concrete prefix
-    // ----------------------------------------
+    #[cfg(feature = "playback_concrete_state")]
+    let conc_state: micro_ram::State = {
+        use std::fs::File;
+        let f = File::open("advice/concrete_state.cbor")
+            .map_err(|e| e.to_string())?;
+        serde_cbor::from_reader(f)
+            .map_err(|e| e.to_string())?
+    };
 
-    let mut conc_state = init_state;
-    // LBB831_734#20819 (pc=253846) is near the loop, but slighly after the start.
-    let loop_label = ".LBB831_734#20819"; //What about .LBB713_45#19734
-    // The loop starts at pc = 253854;
-    //]let loop_addr = 253854; //
-    let loop_addr = exec.labels[loop_label];
-    eprintln!("Starting concrete execution until address: {} ", loop_addr);
-    while conc_state.pc != loop_addr {
-	let conc_pc : Addr = conc_state.pc;
-        let instr = prog[conc_pc];
-	let cyc = conc_state.cycle;
-	// For some reason the cycle is off by one wrt advice
-	let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
-        conc_state.step(instr, adv);
-    }
-
-    eprintln!("STOPed the first run of concrete execution. Pc {}. Cycle {}", conc_state.pc, conc_state.cycle);
-    
-
-    // TODO: remmove this looping and make it lean.
-    let num_loops = 10;
-    eprintln!("Now lets go around {} loops to see how registers change", num_loops);
-    let mut last_cycle_seen = conc_state.cycle;
-    // record the registers
-    let mut reg_log = vec![vec![0; num_loops]; conc_state.regs.len()];
-
-    for li in 0 .. num_loops{
-	// Do a step to move away from the label
-	let instr = prog[conc_state.pc];
-	let cyc = conc_state.cycle;
-	// For some reason the cycle is off by one wrt advice
-	let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
-        conc_state.step(instr, adv);
-	
-	// The run until the label is found again
-	while conc_state.pc != loop_addr {
-            let instr = prog[conc_state.pc];
-	    let cyc = conc_state.cycle;
-	    // For some reason the cycle is off by one wrt advice
-	    let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
-            conc_state.step(instr, adv);
-	}
-	eprintln!{"Testing the loop: Loop took {} cycles", conc_state.cycle - last_cycle_seen};
-	last_cycle_seen = conc_state.cycle;
-
-	for (ri, &x) in conc_state.regs.iter().enumerate() {
-	    reg_log[ri][li] = x;
-	}
-    }
-
-    eprintln!("Log of registers during the loop ");
-    for (i, &_x) in conc_state.regs.iter().enumerate() {
-        eprintln!("{:2}: {:?}", i, reg_log[i]);
-    }
+    MemSnapshot::init_data(conc_state.mem.clone());
 
 
     // ----------------------------------------
@@ -117,7 +57,77 @@ fn run(path: &str) -> Result<(), String> {
 
     let mut pf = Proof::new(prog);
 
-    // TODO: add initial reach prop to `pf`
+
+    // Set up initial proof context
+    //
+    // Unlike `proof_sqrt`, we don't wrap these in `advice::dont_record`.  In `proof_sqrt`, we want
+    // to avoid recording the rule application.  Here, the rule application has already been
+    // omitted, but we'd like to record any `Term`s, `AVec`s, etc. that may show up during the
+    // application of this rule.
+
+    // Arithmetic lemmas.
+
+    let _arith_2n_ne_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+        let n = vars.fresh();
+        // (2 * n == 1) == 0
+        let a = Term::mull(2.into(), n);
+        let eq = Term::cmpe(1.into(), a);
+        let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
+        (vec![].into(), Box::new(ne))
+    })));
+
+    let _arith_2n_plus_5_ne_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+        let m = vars.fresh();
+        let n = vars.fresh();
+        // m < 2^63
+        let m_limit = Prop::Nonzero(Term::cmpa((1 << 63).into(), m));
+        // n < m
+        let n_limit = Prop::Nonzero(Term::cmpa(m, n));
+        // (2 * n + 5 == 1) == 0
+        let a = Term::add(Term::mull(2.into(), n), 5.into());
+        let eq = Term::cmpe(1.into(), a);
+        let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
+        (vec![m_limit, n_limit].into(), Box::new(ne))
+    })));
+
+    let _arith_lt_sub_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+        let a = vars.fresh();
+        let b = vars.fresh();
+        // 0 < a
+        let low = Prop::Nonzero(Term::cmpa(a, 0.into()));
+        // a < b
+        let high = Prop::Nonzero(Term::cmpa(b, a));
+        // a - 1 < b
+        let concl = Prop::Nonzero(Term::cmpa(b, Term::sub(a, 1.into())));
+        (vec![low, high].into(), Box::new(concl))
+    })));
+
+    let _arith_add_assoc = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+        let a = vars.fresh();
+        let b = vars.fresh();
+        let c = vars.fresh();
+        let l = Term::add(Term::add(a, b), c);
+        let r = Term::add(a, Term::add(b, c));
+        let concl = Prop::Nonzero(Term::cmpe(l, r));
+        (vec![].into(), Box::new(concl))
+    })));
+
+    // `conc_state` is reachable.
+    pf.rule_admit(Prop::Reachable(ReachableProp {
+        pred: Binder::new(|_vars| {
+            StatePred {
+                state: symbolic::State::new(
+                    conc_state.pc,
+                    conc_state.regs.map(|x| x.into()),
+                    MemState::Snapshot(MemSnapshot { base: 0 }),
+                    Some(conc_state.clone()),
+                ),
+                props: Box::new([]),
+            }
+        }),
+        min_cycles: conc_state.cycle.into(),
+    }));
+
 
     interp::playback_proof(&mut pf, advice::playback::rules::Tag);
 

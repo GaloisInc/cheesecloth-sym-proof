@@ -24,7 +24,7 @@ use sym_proof::micro_ram::Program;
 use sym_proof::micro_ram::import;
 use sym_proof::micro_ram::{Opcode, MemWidth};
 use sym_proof::micro_ram::state::mem_load;
-use sym_proof::symbolic::{self, MemState, Memory, MemMap};
+use sym_proof::symbolic::{self, MemState, Memory, MemSnapshot, MemMap};
 use sym_proof::tactics::{Tactics, ReachTactics};
 use witness_checker::micro_ram::types::Advice;
 
@@ -142,6 +142,17 @@ fn run(path: &str) -> Result<(), String> {
         addrs_rev
     };
 
+    // Record the concrete state so we don't need to rerun the concrete prefix in later stages.
+    #[cfg(feature = "recording_concrete_state")] {
+        use std::fs::{self, File};
+        fs::create_dir_all("advice")
+            .map_err(|e| e.to_string())?;
+        let mut f = File::create("advice/concrete_state.cbor")
+            .map_err(|e| e.to_string())?;
+        serde_cbor::to_writer(f, &conc_state)
+            .map_err(|e| e.to_string())?;
+    }
+
 
     // ----------------------------------------
     // For diagnostics on registers
@@ -214,61 +225,69 @@ fn run(path: &str) -> Result<(), String> {
 
     println!("==== ADMIT: forall n, 2n != 1");
     // (assert (not (not (= (bvmul (_ bv2 64) n) (_ bv1 64)))))
-    let arith_2n_ne_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
-        let n = vars.fresh();
-        // (2 * n == 1) == 0
-        let a = Term::mull(2.into(), n);
-        let eq = Term::cmpe(1.into(), a);
-        let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
-        (vec![].into(), Box::new(ne))
-    })));
+    let arith_2n_ne_1 = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let n = vars.fresh();
+            // (2 * n == 1) == 0
+            let a = Term::mull(2.into(), n);
+            let eq = Term::cmpe(1.into(), a);
+            let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
+            (vec![].into(), Box::new(ne))
+        })))
+    });
 
     println!("==== ADMIT: forall m n, m < 2^63  ->  n < m  ->  2n + 5 != 1");
     // (assert (bvugt #x7fffffffffffffff m))
     // (assert (bvugt m n))
     // (assert (not (not (= (bvadd (bvmul (_ bv2 64) n) (_ bv5 64)) (_ bv1 64)))))
-    let arith_2n_plus_5_ne_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
-        let m = vars.fresh();
-        let n = vars.fresh();
-        // m < 2^63
-        let m_limit = Prop::Nonzero(Term::cmpa((1 << 63).into(), m));
-        // n < m
-        let n_limit = Prop::Nonzero(Term::cmpa(m, n));
-        // (2 * n + 5 == 1) == 0
-        let a = Term::add(Term::mull(2.into(), n), 5.into());
-        let eq = Term::cmpe(1.into(), a);
-        let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
-        (vec![m_limit, n_limit].into(), Box::new(ne))
-    })));
+    let arith_2n_plus_5_ne_1 = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let m = vars.fresh();
+            let n = vars.fresh();
+            // m < 2^63
+            let m_limit = Prop::Nonzero(Term::cmpa((1 << 63).into(), m));
+            // n < m
+            let n_limit = Prop::Nonzero(Term::cmpa(m, n));
+            // (2 * n + 5 == 1) == 0
+            let a = Term::add(Term::mull(2.into(), n), 5.into());
+            let eq = Term::cmpe(1.into(), a);
+            let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
+            (vec![m_limit, n_limit].into(), Box::new(ne))
+        })))
+    });
 
     println!("==== ADMIT: forall a b, 0 < a  ->  a < b  ->  a - 1 < b");
     // (assert (bvugt a (_ bv0 64)))
     // (assert (bvugt b a))
     // (assert (not (bvugt b (bvsub a (_ bv1 64)))))
-    let arith_lt_sub_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
-        let a = vars.fresh();
-        let b = vars.fresh();
-        // 0 < a
-        let low = Prop::Nonzero(Term::cmpa(a, 0.into()));
-        // a < b
-        let high = Prop::Nonzero(Term::cmpa(b, a));
-        // a - 1 < b
-        let concl = Prop::Nonzero(Term::cmpa(b, Term::sub(a, 1.into())));
-        (vec![low, high].into(), Box::new(concl))
-    })));
+    let arith_lt_sub_1 = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let a = vars.fresh();
+            let b = vars.fresh();
+            // 0 < a
+            let low = Prop::Nonzero(Term::cmpa(a, 0.into()));
+            // a < b
+            let high = Prop::Nonzero(Term::cmpa(b, a));
+            // a - 1 < b
+            let concl = Prop::Nonzero(Term::cmpa(b, Term::sub(a, 1.into())));
+            (vec![low, high].into(), Box::new(concl))
+        })))
+    });
 
 
     println!("==== ADMIT: forall a b c, (a + b) + c == a + (b + c)");
     // (assert (not (= (bvadd (bvadd a b) c) (bvadd a (bvadd b c)))))
-    let arith_add_assoc = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
-        let a = vars.fresh();
-        let b = vars.fresh();
-        let c = vars.fresh();
-        let l = Term::add(Term::add(a, b), c);
-        let r = Term::add(a, Term::add(b, c));
-        let concl = Prop::Nonzero(Term::cmpe(l, r));
-        (vec![].into(), Box::new(concl))
-    })));
+    let arith_add_assoc = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let a = vars.fresh();
+            let b = vars.fresh();
+            let c = vars.fresh();
+            let l = Term::add(Term::add(a, b), c);
+            let r = Term::add(a, Term::add(b, c));
+            let concl = Prop::Nonzero(Term::cmpe(l, r));
+            (vec![].into(), Box::new(concl))
+        })))
+    });
 
 
     // ----------------------------------------
@@ -276,20 +295,28 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
 
     // `conc_state` is reachable.
-    let p_conc = pf.tactic_admit(Prop::Reachable(ReachableProp {
-        pred: Binder::new(|_vars| {
-            StatePred {
-                state: symbolic::State::new(
-                    conc_state.pc,
-                    conc_state.regs.map(|x| x.into()),
-                    MemState::Snapshot(MemSnapshot { base: 0 }),
-                    Some(conc_state.clone()),
-                ),
-                props: Box::new([]),
-            }
-        }),
-        min_cycles: conc_state.cycle.into(),
-    }));
+    let p_conc = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Reachable(ReachableProp {
+            pred: Binder::new(|_vars| {
+                StatePred {
+                    state: symbolic::State::new(
+                        conc_state.pc,
+                        conc_state.regs.map(|x| x.into()),
+                        MemState::Snapshot(MemSnapshot { base: 0 }),
+                        Some(conc_state.clone()),
+                    ),
+                    props: Box::new([]),
+                }
+            }),
+            min_cycles: conc_state.cycle.into(),
+        }))
+    });
+
+
+    // ----------------------------------------
+    // START OF SECRET PROOF
+    // ----------------------------------------
+
 
     // Modify `p_conc` to match the premise of `p_loop`.
     pf.tactic_reach_extend(p_conc, |rpf| {

@@ -120,16 +120,20 @@ playback_linear = []
 
 
 [[bin]]
-name = "proof_sqrt"
-required-features = ["debug_symbolic"]
-
-[[bin]]
 name = "interp_grit"
 required-features = ["playback_concrete_state"]
 
 [[bin]]
 name = "interp_grit_microram"
 required-features = ["microram_api"]
+
+[[bin]]
+name = "proof_sqrt"
+required-features = ["debug_symbolic"]
+
+[[bin]]
+name = "interp_sqrt"
+required-features = ["playback_concrete_state"]
 
 
 [profile.dev]

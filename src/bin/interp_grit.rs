@@ -16,7 +16,7 @@ use log::trace;
 use sym_proof::advice;
 use sym_proof::interp;
 use sym_proof::kernel::Proof;
-use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred};
+use sym_proof::logic::{Term, Prop, Binder, ReachableProp, StatePred};
 use sym_proof::micro_ram::{self, Program};
 use sym_proof::micro_ram::import;
 use sym_proof::symbolic::{self, MemState, MemSnapshot};
@@ -39,7 +39,7 @@ fn run(path: &str) -> Result<(), String> {
     #[cfg(feature = "playback_concrete_state")]
     let conc_state: micro_ram::State = {
         use std::fs::File;
-        let mut f = File::open("advice/concrete_state.cbor")
+        let f = File::open("advice/concrete_state.cbor")
             .map_err(|e| e.to_string())?;
         serde_cbor::from_reader(f)
             .map_err(|e| e.to_string())?
@@ -59,7 +59,7 @@ fn run(path: &str) -> Result<(), String> {
 
     // `conc_state` is reachable.
     //
-    // Unlike `interp_grit`, we don't wrap this in `advice::dont_record`.  In `proof_grit`, we want
+    // Unlike `proof_grit`, we don't wrap this in `advice::dont_record`.  In `proof_grit`, we want
     // to avoid recording the rule application.  Here, the rule application has already been
     // omitted, but we'd like to record any `Term`s, `AVec`s, etc. that may show up during the
     // application of this rule.
