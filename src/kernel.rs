@@ -701,9 +701,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     }
 
     fn mem_load(&self, w: MemWidth, addr: Term) -> Term {
-        //let _ = (w, addr);
-        //die!("StepProof::mem_load not yet implemented")
-	self.state.mem.load(w, addr, &[])
+        self.state.mem.load(w, addr, &[])
             .unwrap_or_else(|e| die!("mem_load failed: {}", e))
     }
 
@@ -785,26 +783,26 @@ impl<'a, 'b> ReachProof<'a, 'b> {
                     .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
                 let dest = y.as_const_or_err()
                     .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
-                if cond == 0{
-		    self.finish_instr();
-                    return ();
-		} else {
-		    self.finish_instr_jump(dest);
-                    return ();
-		}
+                if cond == 0 {
+                    self.finish_instr();
+                    return;
+                } else {
+                    self.finish_instr_jump(dest);
+                    return;
+                }
             },
-	    Opcode::Cnjmp => {
+            Opcode::Cnjmp => {
                 let cond = x.as_const_or_err()
                     .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
                 let dest = y.as_const_or_err()
                     .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
-                if cond != 0{
-		    self.finish_instr();
-                    return ();
-		} else {
-		    self.finish_instr_jump(dest);
-                    return ();
-		}
+                if cond != 0 {
+                    self.finish_instr();
+                    return;
+                } else {
+                    self.finish_instr_jump(dest);
+                    return;
+                }
             },
 
             // Note: `mem_store` and `mem_load` can fail.  For `try_rule_step`, it's important that
@@ -853,22 +851,21 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
         panic::set_hook(old_hook);
 
-	//Easily readable error for debugging tactics
-	let ok: Result<(), String> = match result {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            if let Some(msg) = err.downcast_ref::<&'static str>() {
-                Err(format!("Panic message: {}", msg))
-            } else if let Some(msg) = err.downcast_ref::<String>() {
-		Err(format!("Panic message: {}", msg))
-            } else {
-                // If downcast to String or CustomError fails, provide a default error message
-		Err(format!("Unknown error occurred of type: {:?}", err))
+        //Easily readable error for debugging tactics
+        let ok: Result<(), String> = match result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if let Some(msg) = err.downcast_ref::<&'static str>() {
+                    Err(format!("Panic message: {}", msg))
+                } else if let Some(msg) = err.downcast_ref::<String>() {
+                    Err(format!("Panic message: {}", msg))
+                } else {
+                    // If downcast to String or CustomError fails, provide a default error message
+                    Err(format!("Unknown error occurred of type: {:?}", err))
+                }
             }
-        }
-	};
+        };
 
-	
         ok
     }
 
@@ -881,12 +878,12 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         let instr = self.fetch_instr();
         let x = self.reg_value(instr.r1);
         let y = self.operand_value(instr.op2);
-	
-	if x.is_const() && y.is_const(){
-	    return self.try_rule_step()
-	} else {
-	    return Err(format!("Concrete step failed for instr {:?}. With r1({:?})= {:?} and r2({:?}) {:?}", instr, instr.r1, x, instr.op2, y))
-	}
+
+        if x.is_const() && y.is_const(){
+            return self.try_rule_step()
+        } else {
+            return Err(format!("Concrete step failed for instr {:?}. With r1({:?})= {:?} and r2({:?}) {:?}", instr, instr.r1, x, instr.op2, y))
+        }
     }
     /// Handle a conditional jump (`Opcode::Cjmp` or `Opcode::Cnjmp`), taking the jump if `taken`
     /// is set and falling through otherwise.  There must be a `Prop` in scope (either in the

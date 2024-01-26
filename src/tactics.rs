@@ -247,30 +247,31 @@ pub trait ReachTactics<'a, 'b: 'a> {
     /// Apply `rule_step` repeatedly until it returns `Err`, showing the error when it fails
     fn tactic_run_db(&mut self) {
         let pf = self.proof_mut();
-	while true {
-	    match pf.try_rule_step() {
-		Err (msg) => {
-		    eprintln!("Simple step failed with {}", msg);
-		    return
-		}
-		Ok (_) => ()
-	    }
+        while true {
+            match pf.try_rule_step() {
+                Err (msg) => {
+                    eprintln!("Simple step failed with {}", msg);
+                    return
+                }
+                Ok (_) => ()
+            }
         }
     }
+
     /// Apply `rule_step` repeatedly until it returns `Err`, showing the error when it fails
     fn tactic_run_concrete(&mut self) {
         let pf = self.proof_mut();
-	while true {
-	    match pf.try_rule_step_concrete() {
-		Err (msg) => {
-		    eprintln!("Concrete step failed with {}", msg);
-		    return
-		}
-		Ok (_) => ()
-	    }
+        while true {
+            match pf.try_rule_step_concrete() {
+                Err (msg) => {
+                    eprintln!("Concrete step failed with {}", msg);
+                    return
+                }
+                Ok (_) => ()
+            }
         }
     }
-    
+
     /// Apply `rule_step` until we reach the given `pc`.  Returns `Err` if `rule_step` reports an
     /// error before `pc` is reached.
     fn tactic_run_until(&mut self, pc: Addr) {
@@ -317,19 +318,19 @@ fn show_prop_common(pf: &Proof, verbose: bool, id:PropId) {
     let (scope, index) = id;
     let scope_len = pf.scopes().len();
     if scope < scope_len {
-	let p = &pf.scopes()[scope].props[index];
-	eprintln!(
+        let p = &pf.scopes()[scope].props[index];
+        eprintln!(
             "{}.{}: {}", scope, index,
             pf.printer_depth(scope as u32).verbose(verbose).display(&p),
         );
     } else if scope == scope_len {
-	let p = &pf.props()[index];
-	eprintln!(
+        let p = &pf.props()[index];
+        eprintln!(
             "{}.{}: {}", scope_len, index,
             pf.printer_depth(index as u32).verbose(verbose).display(&p),
         );
     } else {
-	eprintln!("Error: Printing prop id not in scope: {}.{} not in {}", scope, index, pf.scopes().len());
+        eprintln!("Error: Printing prop id not in scope: {}.{} not in {}", scope, index, pf.scopes().len());
     }
 }
 

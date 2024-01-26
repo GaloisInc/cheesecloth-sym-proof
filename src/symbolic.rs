@@ -245,7 +245,7 @@ impl MemMap {
             Ok(result_word) => return Ok(Term::const_(result_word)),
             Err(_) => {},
         }
-	
+
         // We currently require the load to match a store exactly, so each consecutive address must
         // contain the next consecutive byte in order (starting from zero), and all bytes should be
         // extracted from the same expression.
