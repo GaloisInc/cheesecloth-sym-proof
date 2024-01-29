@@ -28,7 +28,7 @@ bumpalo = { version = "3.14.0" }
 deps = ["serde", "log", "cheesecloth-alloc"]
 # These binary targets are kept when building for microram, with adjusted
 # `path`s.
-bins = ["interp_grit_microram"]
+bins = ["interp_grit_microram", "interp_sqrt_microram"]
 
 
 [features]
@@ -134,6 +134,10 @@ required-features = ["debug_symbolic"]
 [[bin]]
 name = "interp_sqrt"
 required-features = ["playback_concrete_state"]
+
+[[bin]]
+name = "interp_sqrt_microram"
+required-features = ["microram_api"]
 
 
 [profile.dev]
