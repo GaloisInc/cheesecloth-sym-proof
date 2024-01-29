@@ -49,7 +49,7 @@ impl Record for Rule {
 
 impl Playback for Rule {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        Rule::from_raw(ps.playback())
+        Rule::from_raw(ps.take_bounded(ReachRule::COUNT as u64 - 1) as u8)
     }
 }
 
@@ -61,7 +61,7 @@ impl Record for ReachRule {
 
 impl Playback for ReachRule {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        ReachRule::from_raw(ps.playback())
+        ReachRule::from_raw(ps.take_bounded(ReachRule::COUNT as u64 - 1) as u8)
     }
 }
 
