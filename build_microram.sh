@@ -1,6 +1,8 @@
 #!/bin/bash
 set -xeuo pipefail
 
+name=$1
+
 src_dir="$(cd "$(dirname "$0")" && pwd)"
 build_dir="$src_dir/build"
 
@@ -13,6 +15,6 @@ cargo +1.56.0 update
 cc_secret_objects= \
     features=microram \
     profile=microram \
-    "$src_dir/../rust-support/build_microram.sh" interp_grit_microram
+    "$src_dir/../rust-support/build_microram.sh" interp_${name}_microram
 
-cp build/interp_grit_microram.{bc,ll,s} "$build_dir"
+cp build/interp_${name}_microram.{bc,ll,s} "$build_dir"

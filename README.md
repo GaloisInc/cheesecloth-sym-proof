@@ -10,7 +10,7 @@ python3 prog_to_rust.py traces/grit.cbor >gen/grit_program.rs
 python3 term_table_to_rust.py advice/term_table.cbor >gen/grit_term_table.rs
 
 # Build RISC-V assembly file for use with MicroRAM
-./build_microram.sh
+./build_microram.sh grit
 
 # Output is written to build/interp_grit_microram.s
 ```
