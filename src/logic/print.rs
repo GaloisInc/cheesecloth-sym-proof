@@ -324,22 +324,26 @@ impl Print for MemMap {
 
         let mut addr = 0;
         let mut size = 0;
-        let mut value = Term::const_(0);
+        // Can't use `Term::const_(0)` as a default here because that introduces an extra advice
+        // call in verbose mode.
+        let mut value = None;
         let mut base = 0;
 
         for (&k, &(v, b)) in self.m.iter() {
-            if k == addr + size as Addr && v == value && b == base + size {
+            if k == addr + size as Addr && Some(v) == value && b == base + size {
                 size += 1;
             } else {
-                emit(addr, size, value, base)?;
+                if let Some(value) = value {
+                    emit(addr, size, value, base)?;
+                }
                 addr = k;
                 size = 1;
-                value = v;
+                value = Some(v);
                 base = b;
             }
         }
 
-        if size > 0 {
+        if let Some(value) = value {
             emit(addr, size, value, base)?;
         }
         Ok(())
