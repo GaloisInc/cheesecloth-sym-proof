@@ -15,16 +15,15 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use env_logger;
 use log::trace;
-use sym_proof::{Word, Addr};
+use sym_proof::Addr;
 use sym_proof::advice;
 use sym_proof::kernel::Proof;
-use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred};
+use sym_proof::logic::{Term, Prop, Binder, ReachableProp, StatePred};
 use sym_proof::logic::shift::ShiftExt;
 use sym_proof::micro_ram::{Program, NUM_REGS};
 use sym_proof::micro_ram::import;
-use sym_proof::micro_ram::{Opcode, MemWidth};
-use sym_proof::micro_ram::state::mem_load;
-use sym_proof::symbolic::{self, MemState, Memory, MemSnapshot, MemMap};
+use sym_proof::micro_ram::Opcode;
+use sym_proof::symbolic::{self, MemState, MemSnapshot};
 use sym_proof::tactics::{Tactics, ReachTactics};
 use witness_checker::micro_ram::types::Advice;
 
@@ -83,7 +82,6 @@ fn run(path: &str) -> Result<(), String> {
         }
         let conc_pc : Addr = conc_state.pc;
         let instr = prog[conc_pc];
-        let cyc = conc_state.cycle;
         let adv: Option<u64> = advise_values.get(&step_index).copied();
         //eprintln!("step: {:?}, {:?}", instr, adv);
         conc_state.step(instr, adv);
@@ -133,7 +131,6 @@ fn run(path: &str) -> Result<(), String> {
                     continue;
                 }
                 let instr = prog[conc_state.pc];
-                let cyc = conc_state.cycle;
                 let adv: Option<u64> = advise_values.get(&step_index).copied();
 
                 match instr.opcode {
@@ -208,55 +205,6 @@ fn run(path: &str) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
-
-    // ----------------------------------------
-    // For diagnostics on registers
-    // Change num_loops=10 to see what
-    // registers change and which ones don't
-    // ----------------------------------------
-    let num_loops = 0;
-    if num_loops > 0 {
-        eprintln!("Now lets go around {} loops to see how registers change", num_loops);
-        let mut last_cycle_seen = conc_state.cycle;
-        // record the registers
-        let mut reg_log = vec![vec![0; num_loops]; conc_state.regs.len()];
-
-        for li in 0 .. num_loops{
-            // Do a step to move away from the label
-            step_index += 1;
-            if !stutters.contains(&step_index) {
-                let instr = prog[conc_state.pc];
-                let cyc = conc_state.cycle;
-                // For some reason the cycle is off by one wrt advice
-                let adv: Option<u64> = advise_values.get(&step_index).copied();
-                conc_state.step(instr, adv);
-            }
-
-            // The run until the label is found again
-            while conc_state.pc != loop_addr {
-                step_index += 1;
-                if stutters.contains(&step_index) {
-                    continue;
-                }
-                let instr = prog[conc_state.pc];
-                let cyc = conc_state.cycle;
-                // For some reason the cycle is off by one wrt advice
-                let adv: Option<u64> = advise_values.get(&step_index).copied();
-                conc_state.step(instr, adv);
-            }
-            eprintln!{"Loop diagnostic {}: Loop took {} cycles", li, conc_state.cycle - last_cycle_seen};
-            last_cycle_seen = conc_state.cycle;
-
-            for (ri, &x) in conc_state.regs.iter().enumerate() {
-                reg_log[ri][li] = x;
-            }
-        }
-
-        eprintln!("Log of registers during the loop diagnostic ");
-        for (i, &x) in conc_state.regs.iter().enumerate() {
-            eprintln!("{:2}: {:?}", i, reg_log[i]);
-        }
-    }
 
     // ----------------------------------------
     // Set up the proof state
@@ -348,7 +296,9 @@ fn run(path: &str) -> Result<(), String> {
         pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
             let n = vars.fresh();
             let a = vars.fresh();
+            // n < N_MAX
             let n_limit = Prop::Nonzero(Term::cmpa(N_MAX.into(), n));
+            // a < 10
             let a_limit = Prop::Nonzero(Term::cmpa(10.into(), a));
             let l = Term::add(Term::mull(2.into(), n), a);
             let concl = Prop::Nonzero(Term::cmpa((1 << 32).into(), l));
@@ -362,6 +312,7 @@ fn run(path: &str) -> Result<(), String> {
     let arith_32bit_mask = advice::dont_record(|| {
         pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
             let a = vars.fresh();
+            // a < 2^32
             let a_limit = Prop::Nonzero(Term::cmpa((1 << 32).into(), a));
             let l = Term::and(a, 0xffff_ffff.into());
             let r = a;
@@ -377,12 +328,14 @@ fn run(path: &str) -> Result<(), String> {
     let arith_sign_extend_ne_1 = advice::dont_record(|| {
         pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
             let a = vars.fresh();
-            let a_ne_1 = Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), a), 0.into()));
+            // a < 2^32
             let a_limit = Prop::Nonzero(Term::cmpa((1 << 32).into(), a));
+            // a != 1
+            let a_ne_1 = Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), a), 0.into()));
             let l1 = Term::mull(Term::shr(a, 31.into()), 0xffff_ffff_0000_0000.into());
             let l = Term::or(l1, a);
             let concl = Prop::Nonzero(Term::cmpe(Term::cmpe(l, 1.into()), 0.into()));
-            (vec![a_ne_1, a_limit].into(), Box::new(concl))
+            (vec![a_limit, a_ne_1].into(), Box::new(concl))
         })))
     });
 
@@ -429,8 +382,8 @@ fn run(path: &str) -> Result<(), String> {
         }
     };
 
-    let init_mem_symbolic = |i| {
-        let mut m = init_mem_concrete.clone();
+    let init_mem_symbolic = |_i| {
+        let m = init_mem_concrete.clone();
         //let i_minus_1 = Term::sub(i, 1.into());
         // One address has the index
         //m.store(MemWidth::W8, Term::const_(0x7ffff468), i_minus_1, &[]).unwrap();
@@ -467,7 +420,7 @@ fn run(path: &str) -> Result<(), String> {
     //      reach(c, st_loop(i))
     let mk_prop_reach = |i: Term, c: Term| {
         Prop::Reachable(ReachableProp {
-            pred: Binder::new(|vars| st_loop(i.shift())),
+            pred: Binder::new(|_vars| st_loop(i.shift())),
             min_cycles: c,
         })
     };
@@ -537,7 +490,6 @@ fn run(path: &str) -> Result<(), String> {
             // Extend `p_reach` with two iterations worth of steps.
             let (p_reach, _) = pf.tactic_swap(p_reach, _last);
             pf.tactic_reach_extend(p_reach, |rpf| {
-                let n = n.shift();
                 let term_i_plus_1 = term_i_plus_1.shift();
                 let term_i_plus_2 = term_i_plus_2.shift();
                 // rpf.show_state();
