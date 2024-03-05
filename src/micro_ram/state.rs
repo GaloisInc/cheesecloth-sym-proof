@@ -47,7 +47,7 @@ impl State {
         mem_store(&mut self.mem, w, addr, val);
     }
 
-    fn mem_load(&self, w: MemWidth, addr: Addr) -> Word {
+    pub fn mem_load(&self, w: MemWidth, addr: Addr) -> Word {
         mem_load(&self.mem, w, addr)
     }
 

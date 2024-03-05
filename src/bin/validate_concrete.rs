@@ -56,7 +56,11 @@ fn run(path: &str) {
                 panic!("program executed out of bounds at {}", pc);
             });
             trace!("exec {:?}, pc = {}, regs = {:?}", instr, state.pc, state.regs);
+            if state.cycle < 200 {
+                eprintln!("step: {:?}, {:?}", instr, advice);
+            }
             state.step(instr, advice);
+            eprintln!("stepped: pc = {}, cyc = {}", state.pc, state.cycle);
 
             assert_eq!(state.pc, expect_state.pc, "after cycle {}", cycle);
             assert_eq!(state.regs, expect_state.regs, "\n after cycle {} and pc {}", cycle, state.pc);
