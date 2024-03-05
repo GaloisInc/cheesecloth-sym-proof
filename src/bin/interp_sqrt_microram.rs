@@ -83,6 +83,7 @@ mod emulate_snapshot {
                 cycle: conc_state.cycle,
                 regs: conc_state.regs,
             };
+            eprintln!("{:#?}", SNAPSHOT_CPU_STATE);
         }
 
         SNAPSHOT_MEM.with(|rc| {
@@ -325,6 +326,7 @@ fn run() -> ! {
 
     let mut pf = Proof::new(prog);
 
+    /*
     unsafe {
         // TODO/HACK: hardcoded initial state from sqrt concrete execution
         SNAPSHOT_CPU_STATE = CpuState {
@@ -339,6 +341,7 @@ fn run() -> ! {
             ]
         };
     }
+    */
 
 
     // Set up initial proof context
@@ -352,25 +355,18 @@ fn run() -> ! {
 
     pf.rule_admit(Prop::Forall(Binder::new(|vars| {
         let n = vars.fresh();
-        // (2 * n == 1) == 0
-        let a = Term::mull(2.into(), n);
+        let a = vars.fresh();
+        // n < 2_000_000_000
+        let n_limit = Prop::Nonzero(Term::cmpa(2_000_000_000.into(), n));
+        // 1 < a
+        let a_min = Prop::Nonzero(Term::cmpa(a, 1.into()));
+        // a < 10
+        let a_max = Prop::Nonzero(Term::cmpa(10.into(), a));
+        // (2 * n + a == 1) == 0
+        let a = Term::add(Term::mull(2.into(), n), a);
         let eq = Term::cmpe(1.into(), a);
         let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
-        (vec![].into(), Box::new(ne))
-    })));
-
-    pf.rule_admit(Prop::Forall(Binder::new(|vars| {
-        let m = vars.fresh();
-        let n = vars.fresh();
-        // m < 2^63
-        let m_limit = Prop::Nonzero(Term::cmpa((1 << 63).into(), m));
-        // n < m
-        let n_limit = Prop::Nonzero(Term::cmpa(m, n));
-        // (2 * n + 5 == 1) == 0
-        let a = Term::add(Term::mull(2.into(), n), 5.into());
-        let eq = Term::cmpe(1.into(), a);
-        let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
-        (vec![m_limit, n_limit].into(), Box::new(ne))
+        (vec![n_limit, a_min, a_max].into(), Box::new(ne))
     })));
 
     pf.rule_admit(Prop::Forall(Binder::new(|vars| {
@@ -393,6 +389,40 @@ fn run() -> ! {
         let r = Term::add(a, Term::add(b, c));
         let concl = Prop::Nonzero(Term::cmpe(l, r));
         (vec![].into(), Box::new(concl))
+    })));
+
+    pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+        let n = vars.fresh();
+        let a = vars.fresh();
+        // n < 2_000_000_000
+        let n_limit = Prop::Nonzero(Term::cmpa(2_000_000_000.into(), n));
+        // a < 10
+        let a_limit = Prop::Nonzero(Term::cmpa(10.into(), a));
+        let l = Term::add(Term::mull(2.into(), n), a);
+        let concl = Prop::Nonzero(Term::cmpa((1 << 32).into(), l));
+        (vec![n_limit, a_limit].into(), Box::new(concl))
+    })));
+
+    pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+        let a = vars.fresh();
+        // a < 2^32
+        let a_limit = Prop::Nonzero(Term::cmpa((1 << 32).into(), a));
+        let l = Term::and(a, 0xffff_ffff.into());
+        let r = a;
+        let concl = Prop::Nonzero(Term::cmpe(l, r));
+        (vec![a_limit].into(), Box::new(concl))
+    })));
+
+    pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+        let a = vars.fresh();
+        // a < 2^32
+        let a_limit = Prop::Nonzero(Term::cmpa((1 << 32).into(), a));
+        // a != 1
+        let a_ne_1 = Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), a), 0.into()));
+        let l1 = Term::mull(Term::shr(a, 31.into()), 0xffff_ffff_0000_0000.into());
+        let l = Term::or(l1, a);
+        let concl = Prop::Nonzero(Term::cmpe(Term::cmpe(l, 1.into()), 0.into()));
+        (vec![a_limit, a_ne_1].into(), Box::new(concl))
     })));
 
     // `conc_state` is reachable.

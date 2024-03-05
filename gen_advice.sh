@@ -28,7 +28,8 @@ edo() {
 cargo_flags=--release
 
 rm -f advice/*.cbor
-edo cargo run $cargo_flags --bin proof_"$name" --features stage0,verbose,debug_symbolic -- "$trace" |& tee stage0.log
+# We run stage0 without --release so it doesn't use panic=abort
+edo cargo run --bin proof_"$name" --features stage0,verbose,debug_symbolic -- "$trace" |& tee stage0.log
 edo cargo run $cargo_flags --bin interp_"$name" --features stage1,verbose -- "$trace" |& tee stage1.log
 edo cargo run $cargo_flags --bin interp_"$name" --features stage2,verbose -- "$trace" |& tee stage2.log
 edo cargo run $cargo_flags --bin interp_"$name" --features stage3,verbose -- "$trace" |& tee stage3.log

@@ -9,6 +9,9 @@ mkdir -p gen
 python3 prog_to_rust.py traces/grit.cbor >gen/grit_program.rs
 python3 term_table_to_rust.py advice/term_table.cbor >gen/grit_term_table.rs
 
+# Test interpreter with final advice
+cargo run --bin interp_grit_microram --features microram_api,verbose
+
 # Build RISC-V assembly file for use with MicroRAM
 ./build_microram.sh grit
 
