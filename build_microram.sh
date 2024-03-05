@@ -13,8 +13,7 @@ cd "$build_dir/cargo"
 cargo +1.56.0 update
 
 cc_secret_objects= \
-    features=microram \
-    profile=microram \
+    features=microram,${cc_extra_features} \
     "$src_dir/../rust-support/build_microram.sh" interp_${name}_microram
 
 cp build/interp_${name}_microram.{bc,ll,s} "$build_dir"

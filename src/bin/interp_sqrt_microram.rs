@@ -26,6 +26,9 @@ use sym_proof::symbolic::{self, MemState, MemSnapshot};
 #[path = "../../gen/sqrt_program.rs"] mod program;
 #[path = "../../gen/sqrt_term_table.rs"] mod term_table;
 
+#[cfg(feature = "microram_hardcoded_snapshot")]
+#[path = "../../gen/sqrt_hardcoded_snapshot.rs"] mod hardcoded_snapshot;
+
 
 // Initial snapshot
 
@@ -43,16 +46,51 @@ static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
 };
 
 
-#[cfg(not(feature = "microram"))]
+#[cfg(feature = "microram_hardcoded_snapshot")]
+mod emulate_snapshot_hardcoded {
+    use sym_proof::{Addr, Word};
+    use sym_proof::micro_ram;
+    use super::{CpuState, SNAPSHOT_CPU_STATE};
+    use super::hardcoded_snapshot;
+
+    #[no_mangle]
+    extern "C" fn cc_load_snapshot_word(addr: u64) -> u64 {
+        static mut COUNTER: usize = 0;
+        unsafe {
+            let (a, v) = hardcoded_snapshot::MEM_ADVICE[COUNTER];
+            COUNTER += 1;
+            assert!(addr == a);
+            v
+        }
+    }
+
+    pub unsafe fn init_snapshot() {
+        unsafe {
+            SNAPSHOT_CPU_STATE = CpuState {
+                pc: hardcoded_snapshot::CPU_STATE_PC,
+                cycle: hardcoded_snapshot::CPU_STATE_CYCLE,
+                regs: hardcoded_snapshot::CPU_STATE_REGS,
+            };
+        }
+    }
+}
+#[cfg(feature = "microram_hardcoded_snapshot")]
+use self::emulate_snapshot_hardcoded::init_snapshot;
+
+#[cfg(all(not(feature = "microram_hardcoded_snapshot"), not(feature = "microram")))]
 mod emulate_snapshot {
     use std::cell::RefCell;
     use std::collections::BTreeMap;
     use sym_proof::{Addr, Word};
-    use sym_proof::micro_ram;
+    use sym_proof::micro_ram::{self, NUM_REGS};
     use super::{CpuState, SNAPSHOT_CPU_STATE};
 
     thread_local! {
         static SNAPSHOT_MEM: RefCell<BTreeMap<Addr, Word>> = RefCell::new(BTreeMap::new());
+    }
+
+    thread_local! {
+        static SNAPSHOT_MEM_ADVICE: RefCell<Vec<(Addr, Word)>> = RefCell::new(Vec::new());
     }
 
     #[no_mangle]
@@ -60,12 +98,11 @@ mod emulate_snapshot {
         let value = SNAPSHOT_MEM.with(|rc| {
             rc.borrow().get(&addr).copied().unwrap()
         });
-        eprintln!("cc_load_snapshot_word: ({addr}, {value}),");
+        SNAPSHOT_MEM_ADVICE.with(|rc| rc.borrow_mut().push((addr, value)));
         value
     }
 
-    #[cfg(not(feature = "microram"))]
-    pub unsafe fn load_concrete_state() {
+    pub unsafe fn init_snapshot() {
         // Load the concrete state from disk so we don't need to rerun the concrete prefix.
         #[cfg(not(feature = "playback_concrete_state"))] {
             compile_error!("can't run proof interpreter without playback_concrete_state");
@@ -90,148 +127,43 @@ mod emulate_snapshot {
             *rc.borrow_mut() = conc_state.mem;
         });
     }
-}
 
-#[cfg(feature = "microram")]
-#[no_mangle]
-extern "C" fn cc_load_snapshot_word(addr: u64) -> u64 {
-    // TODO/HACK: hardcoded initial state from sqrt concrete execution
-    //assert!(addr % mem::size_of::<u64>() as u64 == 0);
-    //unsafe { ptr::read_volatile(addr as usize as *mut u64) }
+    pub fn save_snapshot() {
+        use std::fs::File;
+        use std::io::Write;
+        use serde::Serialize;
 
-    static mut COUNTER: usize = 0;
-    static MEM_ADVICE: &[(u64, u64)] = &[
-        (2147480720, 461708),
-        (4295565208, 8589934593),
-        (4295564600, 137438953475),
-        (4295564584, 137438953484),
-        (4295565304, 4295566784),
-        (4295560608, 4294967296),
-        (4295566792, 12884901889),
-        (4295560592, 4295563808),
-        (4295563808, 65),
-        (4295563808, 65),
-        (4295563808, 65),
-        (4295563808, 65),
-        (4295563808, 65),
-        (4295563808, 65),
-        (4295563808, 65),
-        (4295563808, 65),
-        (4295560600, 4294967297),
-        (4295565280, 12884901889),
-        (4295565200, 4295569024),
-        (4295565232, 8589934593),
-        (4295560608, 4294967296),
-        (4295565256, 12884901888),
-        (4295565224, 4295566608),
-        (4295566784, 4295568544),
-        (4295565248, 4295568448),
-        (4295565272, 4295568928),
-        (4295567168, 4295564912),
-        (4295564608, 12),
-        (4295564592, 4295564704),
-        (2147480728, 4295565136),
-        (4295565136, 8589934593),
-        (2147480768, 4295565128),
-        (4295565128, 4295566176),
-        (2147480688, 253863),
-        (2147480680, 3),
-        (2147480672, 1),
-        (2147480664, 4295564144),
-        (2147480656, 1),
-        (2147480648, 4295564560),
-        (2147480640, 4295565008),
-        (4295564712, 51539607558),
-        (4295565216, 0),
-        (2147480288, 145902),
-        (2147480280, 1),
-        (2147480272, 4295565128),
-        (2147480264, 4295565200),
-        (2147480256, 2),
-        (2147480248, 4295565200),
-        (2147480240, 1),
-        (2147480232, 4295565224),
-        (2147480224, 4295564560),
-        (2147480216, 0),
-        (2147480208, 4295565176),
-        (2147480200, 1),
-        (2147480304, 3721),
-        (2147480312, 0),
-        (4295569024, 3721),
-        (4295569032, 0),
-        (4295565216, 0),
-        (4295565208, 8589934593),
-        (2147480624, 254629),
-        (2147480616, 4295565128),
-        (2147480608, 4295565128),
-        (2147480600, 4295560592),
-        (2147480592, 4295565128),
-        (2147480584, 4295565200),
-        (2147480576, 4295564560),
-        (2147480568, 4295560144),
-        (2147480560, 4295560592),
-        (2147480552, 0),
-        (2147480544, 4295565176),
-        (2147480536, 1),
-        (2147480528, 4295565032),
-        (4295564720, 64424509453),
-        (4295565240, 0),
-        (4295565264, 0),
-        (4295565256, 12884901888),
-        (4295565264, 0),
-        (4295565288, 0),
-        (4295566800, 0),
-        (2147480456, 4295565272),
-        (4295566792, 12884901889),
-        (2147480520, 4295566784),
-        (2147480464, 57),
-        (4295568544, 9367487224930631680),
-        (4295566800, 0),
-        (2147480352, 1),
-        (2147480344, 1),
-        (2147480432, 4295564560),
-        (2147480440, 0),
-        (2147480424, 4295565128),
-        (4295565240, 0),
-        (4295565232, 8589934593),
-        (2147480416, 0),
-        (2147480488, 4294967295),
-        (2147480480, 0),
-        (2147480472, 0),
-        (2147480512, 1),
-        (2147480448, 9079256848778919936),
-        (2147480504, 8),
-        (2147480496, 2),
-        (4295568456, 28),
-        (4295568448, 0),
-        (4295568928, 2305843009213693952),
-        (4295568936, 0),
-        (4295566608, 57),
-        (4295565288, 0),
-        (4295565280, 12884901889),
-        (2147480400, 144165),
-        (2147480392, 1),
-        (2147480384, 57),
-        (2147480376, 57),
-        (2147480368, 9367487224930631680),
-        (2147480360, 4295568928),
-        (4295566176, 16),
-        (4295565144, 0),
-        (4295564568, 4295564912),
-        (4295565136, 8589934593),
-        (4295564600, 137438953475),
-        (4295564584, 137438953484),
-        (4295564608, 12),
-        (4295564616, 0),
-        (2147480784, 3),
-    ];
-    unsafe {
-        let (a, v) = MEM_ADVICE[COUNTER];
-        COUNTER += 1;
-        assert!(addr == a);
-        v
+        #[derive(Serialize)]
+        struct Snapshot {
+            pc: Word,
+            cycle: Word,
+            regs: Vec<Word>,
+            mem: Vec<(Addr, Word)>,
+        }
+
+        let cpu = unsafe { &SNAPSHOT_CPU_STATE };
+        let snap = Snapshot {
+            pc: cpu.pc,
+            cycle: cpu.cycle,
+            regs: cpu.regs[..].to_owned(),
+            mem: SNAPSHOT_MEM_ADVICE.with(|rc| rc.take()),
+        };
+
+        let mut f = File::create("advice/hardcoded_snapshot.cbor").unwrap();
+        serde_cbor::to_writer(f, &snap).unwrap();
     }
 }
+#[cfg(all(not(feature = "microram_hardcoded_snapshot"), not(feature = "microram")))]
+use self::emulate_snapshot::init_snapshot;
+
+#[cfg(all(not(feature = "microram_hardcoded_snapshot"), feature = "microram"))]
+#[no_mangle]
+extern "C" fn cc_load_snapshot_word(addr: u64) -> u64 {
+    assert!(addr % mem::size_of::<u64>() as u64 == 0);
+    unsafe { ptr::read_volatile(addr as usize as *mut u64) }
+}
+#[cfg(all(not(feature = "microram_hardcoded_snapshot"), feature = "microram"))]
+unsafe fn init_snapshot() {}
 
 
 #[cfg(not(feature = "microram"))]
@@ -277,6 +209,7 @@ mod emulate_advice {
     #[no_mangle]
     extern "C" fn __cc_advise(max: advice::Value) -> advice::Value {
         let x = ADVICE.with(|c| c.borrow_mut().next());
+        //std::eprintln!("advise({}) = {}", max, x);
         assert!(x <= max);
         x
     }
@@ -286,6 +219,8 @@ mod emulate_advice {
 #[cfg(not(feature = "microram"))]
 fn exit() -> ! {
     println!("ok");
+    #[cfg(not(feature = "microram_hardcoded_snapshot"))]
+    emulate_snapshot::save_snapshot();
     std::process::exit(0);
 }
 
@@ -317,6 +252,8 @@ fn fail() -> ! {
 
 
 fn run() -> ! {
+    unsafe { init_snapshot() };
+
     let prog = Program::new(&program::PROG_INSTRS, &program::PROG_CHUNKS);
 
 
@@ -325,23 +262,6 @@ fn run() -> ! {
     // ----------------------------------------
 
     let mut pf = Proof::new(prog);
-
-    /*
-    unsafe {
-        // TODO/HACK: hardcoded initial state from sqrt concrete execution
-        SNAPSHOT_CPU_STATE = CpuState {
-            pc: 253846,
-            cycle: 5511359,
-            regs: [
-                0, 253863, 2147480696, 0, 0, 57, 0, 0,
-                4, 1, 4295565128, 1, 11, 16, 4295566176, 1,
-                4295566176, 0, 4295564144, 1, 4295564560, 4295565008, 4295560144, 4295560592,
-                0, 4295565176, 1, 4295565032, 0, 28, 0, 0,
-                4295566176
-            ]
-        };
-    }
-    */
 
 
     // Set up initial proof context
@@ -469,7 +389,6 @@ fn run() -> ! {
 #[cfg(not(feature = "microram"))]
 fn main() {
     env_logger::init();
-    unsafe { emulate_snapshot::load_concrete_state() };
     unsafe { emulate_advice::load_advice() };
     run();
 }

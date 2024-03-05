@@ -39,6 +39,9 @@ debug_symbolic = []
 microram_api = ["stage4"]
 # Build for running on MicroRAM.  This omits the emulation for `__cc_*` APIs.
 microram = ["microram_api", "cheesecloth-alloc"]
+# Use a hardcoded snapshot instead of receiving it via spontaneous jump from a
+# concrete execution.
+microram_hardcoded_snapshot = []
 deny_warnings = []
 
 stage0 = [
