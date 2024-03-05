@@ -285,19 +285,6 @@ fn run(path: &str) -> Result<(), String> {
     // To check each lemma, append the Z3 prologue, the SMTlib code for the lemma, and the Z3
     // epilogue.  It should report `unsat`.
 
-    println!("==== ADMIT: forall n, 2n != 1");
-    // (assert (not (not (= (bvmul (_ bv2 64) n) (_ bv1 64)))))
-    let arith_2n_ne_1 = advice::dont_record(|| {
-        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
-            let n = vars.fresh();
-            // (2 * n == 1) == 0
-            let a = Term::mull(2.into(), n);
-            let eq = Term::cmpe(1.into(), a);
-            let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
-            (vec![].into(), Box::new(ne))
-        })))
-    });
-
     println!("==== ADMIT: forall n a, n < N_MAX  ->  1 < a  ->  a < 10  ->  2n + a != 1");
     // (assert (bvugt (_ bv2000000000 64) n))
     // (assert (bvugt a (_ bv1 64)))
@@ -338,7 +325,6 @@ fn run(path: &str) -> Result<(), String> {
             (vec![low, high].into(), Box::new(concl))
         })))
     });
-
 
     println!("==== ADMIT: forall a b c, (a + b) + c == a + (b + c)");
     // (assert (not (= (bvadd (bvadd a b) c) (bvadd a (bvadd b c)))))
@@ -525,9 +511,6 @@ fn run(path: &str) -> Result<(), String> {
 
             let term_i_plus_1 = Term::add(Term::mull(n, 2.into()), (start_i + 1).into());
             let term_i_plus_2 = Term::add(Term::mull(n, 2.into()), (start_i + 2).into());
-
-            let arith_2n_ne_1 = pf.tactic_clone(arith_2n_ne_1);
-            let _i_ne_1 = pf.tactic_apply(arith_2n_ne_1, &[Term::add(n, 2.into())]);
 
             let arith_2n_plus_k_ne_1 = pf.tactic_clone(arith_2n_plus_k_ne_1);
             let _i_plus_1_ne_1 = pf.tactic_apply(arith_2n_plus_k_ne_1, &[n, (start_i + 1).into()]);
