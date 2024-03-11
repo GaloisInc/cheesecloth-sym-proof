@@ -1,11 +1,4 @@
-//! Proof that grit runs for at least 1000 steps.  We first run the program concretely up to the
-//! start of the first `memcpy` (~500 steps), then we show that the `memcpy` loop will run for
-//! at least 63 iterations (~800 steps).
-//!
-//! Usage:
-//! ```
-//! cargo run --bin proof_grit -- grit.cbor
-//! ```
+//! Proof that grit runs for at least 1000 steps.
 // The proof implementation returns `Err` when a rule fails to apply.  A bad proof will be caught
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
@@ -20,17 +13,21 @@ extern crate alloc;
 use core::mem;
 use core::ptr;
 use alloc::boxed::Box;
+use alloc::vec;
 #[cfg(feature = "microram")] use cheesecloth_alloc;
 use sym_proof::Word;
 use sym_proof::advice;
 use sym_proof::interp;
 use sym_proof::kernel::Proof;
-use sym_proof::logic::{TermKind, Prop, Binder, ReachableProp, StatePred};
+use sym_proof::logic::{Term, TermKind, Prop, Binder, ReachableProp, StatePred};
 use sym_proof::micro_ram::{Program, NUM_REGS};
 use sym_proof::symbolic::{self, MemState, MemSnapshot};
 
 #[path = "../../gen/grit_program.rs"] mod program;
 #[path = "../../gen/grit_term_table.rs"] mod term_table;
+
+#[cfg(feature = "microram_hardcoded_snapshot")]
+#[path = "../../gen/grit_hardcoded_snapshot.rs"] mod hardcoded_snapshot;
 
 
 // Initial snapshot
@@ -42,34 +39,76 @@ struct CpuState {
     regs: [Word; NUM_REGS],
 }
 
-static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
-    pc: 0,
-    cycle: 0,
-    regs: [0; NUM_REGS],
-};
 
+#[cfg(feature = "microram_hardcoded_snapshot")]
+mod emulate_snapshot_hardcoded {
+    use sym_proof::{Addr, Word};
+    use sym_proof::micro_ram::{self, NUM_REGS};
+    use super::CpuState;
+    use super::hardcoded_snapshot;
 
-#[cfg(not(feature = "microram"))]
+    #[no_mangle]
+    extern "C" fn cc_load_snapshot_word(addr: u64) -> u64 {
+        static mut COUNTER: usize = 0;
+        unsafe {
+            let (a, v) = hardcoded_snapshot::MEM_ADVICE[COUNTER];
+            COUNTER += 1;
+            assert!(addr == a);
+            v
+        }
+    }
+
+    pub static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
+        pc: 0,
+        cycle: 0,
+        regs: [0; NUM_REGS],
+    };
+
+    pub unsafe fn init_snapshot() {
+        unsafe {
+            SNAPSHOT_CPU_STATE = CpuState {
+                pc: hardcoded_snapshot::CPU_STATE_PC,
+                cycle: hardcoded_snapshot::CPU_STATE_CYCLE,
+                regs: hardcoded_snapshot::CPU_STATE_REGS,
+            };
+        }
+    }
+}
+#[cfg(feature = "microram_hardcoded_snapshot")]
+use self::emulate_snapshot_hardcoded::{init_snapshot, SNAPSHOT_CPU_STATE};
+
+#[cfg(all(not(feature = "microram_hardcoded_snapshot"), not(feature = "microram")))]
 mod emulate_snapshot {
     use std::cell::RefCell;
     use std::collections::BTreeMap;
     use sym_proof::{Addr, Word};
-    use sym_proof::micro_ram;
-    use super::{CpuState, SNAPSHOT_CPU_STATE};
+    use sym_proof::micro_ram::{self, NUM_REGS};
+    use super::CpuState;
 
     thread_local! {
         static SNAPSHOT_MEM: RefCell<BTreeMap<Addr, Word>> = RefCell::new(BTreeMap::new());
     }
 
-    #[no_mangle]
-    extern "C" fn cc_load_snapshot_word(addr: u64) -> u64 {
-        SNAPSHOT_MEM.with(|rc| {
-            rc.borrow().get(&addr).copied().unwrap()
-        })
+    thread_local! {
+        static SNAPSHOT_MEM_ADVICE: RefCell<Vec<(Addr, Word)>> = RefCell::new(Vec::new());
     }
 
-    #[cfg(not(feature = "microram"))]
-    pub unsafe fn load_concrete_state() {
+    #[no_mangle]
+    extern "C" fn cc_load_snapshot_word(addr: u64) -> u64 {
+        let value = SNAPSHOT_MEM.with(|rc| {
+            rc.borrow().get(&addr).copied().unwrap()
+        });
+        SNAPSHOT_MEM_ADVICE.with(|rc| rc.borrow_mut().push((addr, value)));
+        value
+    }
+
+    pub static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
+        pc: 0,
+        cycle: 0,
+        regs: [0; NUM_REGS],
+    };
+
+    pub unsafe fn init_snapshot() {
         // Load the concrete state from disk so we don't need to rerun the concrete prefix.
         #[cfg(not(feature = "playback_concrete_state"))] {
             compile_error!("can't run proof interpreter without playback_concrete_state");
@@ -88,27 +127,58 @@ mod emulate_snapshot {
                 cycle: conc_state.cycle,
                 regs: conc_state.regs,
             };
+            eprintln!("{:#?}", SNAPSHOT_CPU_STATE);
         }
 
         SNAPSHOT_MEM.with(|rc| {
             *rc.borrow_mut() = conc_state.mem;
         });
     }
-}
 
-#[cfg(feature = "microram")]
-#[no_mangle]
-extern "C" fn cc_load_snapshot_word(addr: u64) -> u64 {
-    // TODO/HACK: hardcoded initial state from grit concrete execution
-    //assert!(addr % mem::size_of::<u64>() as u64 == 0);
-    //unsafe { ptr::read_volatile(addr as usize as *mut u64) }
+    pub fn save_snapshot() {
+        use std::fs::{self, File};
+        use std::io::Write;
+        use serde::Serialize;
+        use sym_proof::advice;
 
-    if addr == 8 {
-        return 2386;
-    } else {
-        panic!()
+        #[derive(Serialize)]
+        struct Snapshot {
+            pc: Word,
+            cycle: Word,
+            regs: Vec<Word>,
+            mem: Vec<(Addr, Word)>,
+        }
+
+        let cpu = unsafe { &SNAPSHOT_CPU_STATE };
+        let snap = Snapshot {
+            pc: cpu.pc,
+            cycle: cpu.cycle,
+            regs: cpu.regs[..].to_owned(),
+            mem: SNAPSHOT_MEM_ADVICE.with(|rc| rc.take()),
+        };
+
+        let dir = advice::advice_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let mut f = File::create(dir.join("hardcoded_snapshot.cbor")).unwrap();
+        serde_cbor::to_writer(f, &snap).unwrap();
     }
 }
+#[cfg(all(not(feature = "microram_hardcoded_snapshot"), not(feature = "microram")))]
+use self::emulate_snapshot::{init_snapshot, SNAPSHOT_CPU_STATE};
+
+#[cfg(all(not(feature = "microram_hardcoded_snapshot"), feature = "microram"))]
+#[no_mangle]
+extern "C" fn cc_load_snapshot_word(addr: u64) -> u64 {
+    assert!(addr % mem::size_of::<u64>() as u64 == 0);
+    unsafe { ptr::read_volatile(addr as usize as *mut u64) }
+}
+#[cfg(all(not(feature = "microram_hardcoded_snapshot"), feature = "microram"))]
+extern "C" {
+    #[link_name = "__spontaneous_jump_state"]
+    static mut SNAPSHOT_CPU_STATE: CpuState;
+}
+#[cfg(all(not(feature = "microram_hardcoded_snapshot"), feature = "microram"))]
+unsafe fn init_snapshot() {}
 
 
 #[cfg(not(feature = "microram"))]
@@ -163,6 +233,8 @@ mod emulate_advice {
 #[cfg(not(feature = "microram"))]
 fn exit() -> ! {
     println!("ok");
+    #[cfg(not(feature = "microram_hardcoded_snapshot"))]
+    emulate_snapshot::save_snapshot();
     std::process::exit(0);
 }
 
@@ -194,6 +266,8 @@ fn fail() -> ! {
 
 
 fn run() -> ! {
+    unsafe { init_snapshot() };
+
     let prog = Program::new(&program::PROG_INSTRS, &program::PROG_CHUNKS);
 
 
@@ -203,20 +277,6 @@ fn run() -> ! {
 
     let mut pf = Proof::new(prog);
 
-    unsafe {
-        // TODO/HACK: hardcoded initial state from grit concrete execution
-        SNAPSHOT_CPU_STATE = CpuState {
-            pc: 67,
-            cycle: 584,
-            regs: [
-                0, 1489, 2147483432, 0, 0, 0, 0, 0,
-                64, 24, 4294967512, 135, 63, 4294967513, 0, 4294967513,
-                0, 0, 0, 0, 4294967392, 4294967312, 4, 48,
-                4, 16, 40, 4, 0, 0, 0, 0,
-                4294967512,
-            ]
-        };
-    }
 
     // `conc_state` is reachable.
     //
@@ -266,7 +326,6 @@ fn run() -> ! {
 #[cfg(not(feature = "microram"))]
 fn main() {
     env_logger::init();
-    unsafe { emulate_snapshot::load_concrete_state() };
     unsafe { emulate_advice::load_advice() };
     run();
 }
