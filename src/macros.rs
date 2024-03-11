@@ -83,10 +83,12 @@ macro_rules! require_eq {
     ($x:expr, $y:expr, $($args:tt)*) => {
         require!(
             $x == $y,
-            "{} (when checking {} == {})",
+            "{} (when checking {} == {}, {:?} != {:?})",
             format_args!($($args)*),
             stringify!($x),
             stringify!($y),
+            $x,
+            $y,
         )
     };
 }
