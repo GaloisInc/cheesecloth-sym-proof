@@ -11,9 +11,11 @@
 #![deny(unused_must_use)]
 #![cfg_attr(feature = "deny_warnings", deny(warnings))]
 use core::array;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use env_logger;
 use log::trace;
+use sym_proof::Addr;
 use sym_proof::advice;
 use sym_proof::kernel::Proof;
 use sym_proof::logic::{Term, Prop, Binder, VarCounter, ReachableProp, StatePred};
@@ -22,6 +24,7 @@ use sym_proof::micro_ram::{Program, MemWidth};
 use sym_proof::micro_ram::import;
 use sym_proof::symbolic::{self, MemState, MemSnapshot, MemLog};
 use sym_proof::tactics::{Tactics, ReachTactics};
+use witness_checker::micro_ram::types::Advice;
 
 fn run(path: &str) -> Result<(), String> {
     let exec = import::load_exec(path);
@@ -33,27 +36,54 @@ fn run(path: &str) -> Result<(), String> {
     eprintln!("loaded memory: {} words", init_state.mem.len());
     trace!("initial regs = {:?}", init_state.regs);
 
+    // ----------------------------------------
+    // Load advice
+    // ----------------------------------------
+
+    eprintln!("=== Load advice");
+    let mut advise_values = HashMap::<u64, u64>::new();
+    let mut stutters = HashSet::<u64>::new();
+    // Iterate through all the advices (i.e. MemOps, Stutter, Advice)
+    // and only keep the `Advice` ones.
+    for (&step_index, advice_vec) in exec.advice.iter() {
+        for advice in advice_vec {
+            match *advice {
+                Advice::Advise { advise } => {
+                    advise_values.insert(step_index, advise);
+                },
+                Advice::Stutter => {
+                    stutters.insert(step_index);
+                },
+                _ => {},
+            }
+        }
+    }
 
     // ----------------------------------------
     // Run the concrete prefix
     // ----------------------------------------
 
     let mut conc_state = init_state;
+    let mut step_index = 0;
     // Run to the start of the first `memcpy`.
     let loop_label = exec.labels.keys().find(|s| s.starts_with(".LBB1_5#")).unwrap();
     let loop_addr = exec.labels[loop_label];
+
+    eprintln!("=== Concrete execution until pc={} ", loop_addr);
     while conc_state.pc != loop_addr {
-        let instr = prog[conc_state.pc];
-        conc_state.step(instr, None);
+        // Increment early.  The first step's advice is at index 1, not 0.
+        step_index += 1;
+        if stutters.contains(&step_index) {
+            continue;
+        }
+        let conc_pc : Addr = conc_state.pc;
+        let instr = prog[conc_pc];
+        let adv: Option<u64> = advise_values.get(&step_index).copied();
+        //eprintln!("step: {:?}, {:?}", instr, adv);
+        conc_state.step(instr, adv);
+        //eprintln!("stepped: pc = {}, cyc = {}", conc_state.pc, conc_state.cycle);
     }
-    // Run concretely: 8 steps to the start of the loop, then 11 more steps to run the first
-    // iteration up to the condition check.  The loop is structured as a do/while, so the condition
-    // check comes at the end.
-    for _ in 0 .. 8 + 11 {
-        let instr = prog[conc_state.pc];
-        eprintln!("run concrete [{}]: {:?}", conc_state.pc, instr);
-        conc_state.step(instr, None);
-    }
+    eprintln!("\tConcretely reached {} in {} cycle.", conc_state.pc, conc_state.cycle);
 
     eprintln!("concrete registers:");
     for (i, &x) in conc_state.regs.iter().enumerate() {
