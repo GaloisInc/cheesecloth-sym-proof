@@ -39,7 +39,7 @@ fn run(path: &str) -> Result<(), String> {
     #[cfg(feature = "playback_concrete_state")]
     let conc_state: micro_ram::State = {
         use std::fs::File;
-        let f = File::open("advice/concrete_state.cbor")
+        let f = File::open(advice::advice_dir().join("concrete_state.cbor"))
             .map_err(|e| e.to_string())?;
         serde_cbor::from_reader(f)
             .map_err(|e| e.to_string())?

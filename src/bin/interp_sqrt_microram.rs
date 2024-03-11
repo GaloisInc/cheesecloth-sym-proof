@@ -34,15 +34,10 @@ use sym_proof::symbolic::{self, MemState, MemSnapshot};
 
 #[derive(Clone, Debug)]
 #[repr(C)]
-struct CpuState {
+pub struct CpuState {
     regs: [Word; NUM_REGS],
     pc: Word,
     cycle: Word,
-}
-
-extern "C" {
-    #[link_name = "__spontaneous_jump_state"]
-    static mut SNAPSHOT_CPU_STATE: CpuState;
 }
 
 
@@ -64,8 +59,7 @@ mod emulate_snapshot_hardcoded {
         }
     }
 
-    #[export_name = "__spontaneous_jump_state"]
-    static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
+    pub static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
         pc: 0,
         cycle: 0,
         regs: [0; NUM_REGS],
@@ -82,7 +76,7 @@ mod emulate_snapshot_hardcoded {
     }
 }
 #[cfg(feature = "microram_hardcoded_snapshot")]
-use self::emulate_snapshot_hardcoded::init_snapshot;
+use self::emulate_snapshot_hardcoded::{init_snapshot, SNAPSHOT_CPU_STATE};
 
 #[cfg(all(not(feature = "microram_hardcoded_snapshot"), not(feature = "microram")))]
 mod emulate_snapshot {
@@ -109,8 +103,7 @@ mod emulate_snapshot {
         value
     }
 
-    #[export_name = "__spontaneous_jump_state"]
-    static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
+    pub static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
         pc: 0,
         cycle: 0,
         regs: [0; NUM_REGS],
@@ -124,7 +117,8 @@ mod emulate_snapshot {
         #[cfg(feature = "playback_concrete_state")]
         let conc_state: micro_ram::State = {
             use std::fs::File;
-            let f = File::open("advice/concrete_state.cbor").unwrap();
+            use sym_proof::advice;
+            let f = File::open(advice::advice_dir().join("concrete_state.cbor")).unwrap();
             serde_cbor::from_reader(f).unwrap()
         };
 
@@ -143,9 +137,10 @@ mod emulate_snapshot {
     }
 
     pub fn save_snapshot() {
-        use std::fs::File;
+        use std::fs::{self, File};
         use std::io::Write;
         use serde::Serialize;
+        use sym_proof::advice;
 
         #[derive(Serialize)]
         struct Snapshot {
@@ -163,18 +158,25 @@ mod emulate_snapshot {
             mem: SNAPSHOT_MEM_ADVICE.with(|rc| rc.take()),
         };
 
-        let mut f = File::create("advice/hardcoded_snapshot.cbor").unwrap();
+        let dir = advice::advice_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let mut f = File::create(dir.join("hardcoded_snapshot.cbor")).unwrap();
         serde_cbor::to_writer(f, &snap).unwrap();
     }
 }
 #[cfg(all(not(feature = "microram_hardcoded_snapshot"), not(feature = "microram")))]
-use self::emulate_snapshot::init_snapshot;
+use self::emulate_snapshot::{init_snapshot, SNAPSHOT_CPU_STATE};
 
 #[cfg(all(not(feature = "microram_hardcoded_snapshot"), feature = "microram"))]
 #[no_mangle]
 extern "C" fn cc_load_snapshot_word(addr: u64) -> u64 {
     assert!(addr % mem::size_of::<u64>() as u64 == 0);
     unsafe { ptr::read_volatile(addr as usize as *mut u64) }
+}
+#[cfg(all(not(feature = "microram_hardcoded_snapshot"), feature = "microram"))]
+extern "C" {
+    #[link_name = "__spontaneous_jump_state"]
+    static mut SNAPSHOT_CPU_STATE: CpuState;
 }
 #[cfg(all(not(feature = "microram_hardcoded_snapshot"), feature = "microram"))]
 unsafe fn init_snapshot() {}
@@ -213,7 +215,7 @@ mod emulate_advice {
 
     pub unsafe fn load_advice() {
         // Load advice
-        let f = File::open("advice/linear.cbor").unwrap();
+        let f = File::open(advice::advice_dir().join("linear.cbor")).unwrap();
         let advice: Vec<_> = serde_cbor::from_reader(f).unwrap();
         ADVICE.with(|c| {
             *c.borrow_mut() = AdviceStream::new(advice);
@@ -223,7 +225,6 @@ mod emulate_advice {
     #[no_mangle]
     extern "C" fn __cc_advise(max: advice::Value) -> advice::Value {
         let x = ADVICE.with(|c| c.borrow_mut().next());
-        //std::eprintln!("advise({}) = {}", max, x);
         assert!(x <= max);
         x
     }
@@ -409,8 +410,15 @@ fn main() {
 
 #[cfg(feature = "microram")]
 #[no_mangle]
+#[inline(never)]
 pub extern "C" fn __spontaneous_jump_dest() {
     run();
+}
+
+#[cfg(all(feature = "microram", feature = "microram_hardcoded_snapshot"))]
+#[no_mangle]
+pub extern "C" fn main() {
+    __spontaneous_jump_dest();
 }
 
 
