@@ -278,12 +278,58 @@ fn run() -> ! {
     let mut pf = Proof::new(prog);
 
 
-    // `conc_state` is reachable.
+    // Set up initial proof context
     //
-    // Unlike `interp_grit`, we don't wrap this in `advice::dont_record`.  In `proof_grit`, we want
+    // Unlike `proof_grit`, we don't wrap these in `advice::dont_record`.  In `proof_grit`, we want
     // to avoid recording the rule application.  Here, the rule application has already been
     // omitted, but we'd like to record any `Term`s, `AVec`s, etc. that may show up during the
     // application of this rule.
+
+    // Arithmetic lemmas.
+
+    let arith_n_minus_1_ne_0 = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+        let n = vars.fresh();
+        // n > 1
+        let n_limit = Prop::Nonzero(Term::cmpa(n, 1.into()));
+        // (n - 1) != 0
+        let n_minus_1 = Term::sub(n, 1.into());
+        let concl = Prop::Nonzero(Term::cmpe(Term::cmpe(n_minus_1, 0.into()), 0.into()));
+        (vec![n_limit].into(), Box::new(concl))
+    })));
+
+    let arith_n_plus_1_gt_1 = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+        let n = vars.fresh();
+        // n > 0
+        let n_lo = Prop::Nonzero(Term::cmpa(n, 0.into()));
+        // n < 1000
+        let n_hi = Prop::Nonzero(Term::cmpa(1000.into(), n));
+        // n + 1 > 1
+        let concl = Prop::Nonzero(Term::cmpa(Term::add(n, 1.into()), 1.into()));
+        (vec![n_lo, n_hi].into(), Box::new(concl))
+    })));
+
+    let arith_n_minus_1_lt_1000 = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+        let n = vars.fresh();
+        // n > 0
+        let n_lo = Prop::Nonzero(Term::cmpa(n, 0.into()));
+        // n < 1000
+        let n_hi = Prop::Nonzero(Term::cmpa(1000.into(), n));
+        // n + 1 > 1
+        let concl = Prop::Nonzero(Term::cmpa(1000.into(), Term::sub(n, 1.into())));
+        (vec![n_lo, n_hi].into(), Box::new(concl))
+    })));
+
+    let arith_add_assoc = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+        let a = vars.fresh();
+        let b = vars.fresh();
+        let c = vars.fresh();
+        let l = Term::add(Term::add(a, b), c);
+        let r = Term::add(a, Term::add(b, c));
+        let concl = Prop::Nonzero(Term::cmpe(l, r));
+        (vec![].into(), Box::new(concl))
+    })));
+
+    // `conc_state` is reachable.
     let cpu_state = unsafe { &SNAPSHOT_CPU_STATE };
     pf.rule_admit(Prop::Reachable(ReachableProp {
         pred: Binder::new(|_vars| {

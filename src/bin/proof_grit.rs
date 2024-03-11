@@ -40,8 +40,9 @@ fn run(path: &str) -> Result<(), String> {
 
     let mut conc_state = init_state;
     // Run to the start of the first `memcpy`.
-    let memcpy_addr = exec.labels["memcpy#39"];
-    while conc_state.pc != memcpy_addr {
+    let loop_label = exec.labels.keys().find(|s| s.starts_with(".LBB1_5#")).unwrap();
+    let loop_addr = exec.labels[loop_label];
+    while conc_state.pc != loop_addr {
         let instr = prog[conc_state.pc];
         conc_state.step(instr, None);
     }
@@ -79,10 +80,93 @@ fn run(path: &str) -> Result<(), String> {
 
     MemSnapshot::init_data(conc_state.mem.clone());
 
-    // `conc_state` is reachable.
+    // ----------------------------------------
+    // Admit some arithmetic lemmas
+    // ----------------------------------------
+
+    // Z3 prologue:
+    // (declare-const a (_ BitVec 64))
+    // (declare-const b (_ BitVec 64))
+    // (declare-const c (_ BitVec 64))
+    // (declare-const d (_ BitVec 64))
+    // (declare-const n (_ BitVec 64))
+    // (declare-const m (_ BitVec 64))
+
+    // Z3 epilogue:
+    // (check-sat)
+    // (get-model)
+
+    // To check each lemma, append the Z3 prologue, the SMTlib code for the lemma, and the Z3
+    // epilogue.  It should report `unsat`.
+
+    println!("==== ADMIT: forall n, n > 1  ->  (n - 1) != 0");
+    // (assert (bvugt n (_ bv1 64)))
+    // (assert (not (not (= (bvsub n (_ bv1 64)) (_ bv0 64)))))
+    let arith_n_minus_1_ne_0 = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let n = vars.fresh();
+            // n > 1
+            let n_limit = Prop::Nonzero(Term::cmpa(n, 1.into()));
+            // (n - 1) != 0
+            let n_minus_1 = Term::sub(n, 1.into());
+            let concl = Prop::Nonzero(Term::cmpe(Term::cmpe(n_minus_1, 0.into()), 0.into()));
+            (vec![n_limit].into(), Box::new(concl))
+        })))
+    });
+
+    println!("==== ADMIT: forall n, n > 0  ->  n < 1000  ->  n + 1 > 1");
+    // (assert (bvugt n (_ bv0 64)))
+    // (assert (bvugt (_ bv1000 64) n))
+    // (assert (not (bvugt (bvadd n (_ bv1 64)) (_ bv1 64))))
+    let arith_n_plus_1_gt_1 = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let n = vars.fresh();
+            // n > 0
+            let n_lo = Prop::Nonzero(Term::cmpa(n, 0.into()));
+            // n < 1000
+            let n_hi = Prop::Nonzero(Term::cmpa(1000.into(), n));
+            // n + 1 > 1
+            let concl = Prop::Nonzero(Term::cmpa(Term::add(n, 1.into()), 1.into()));
+            (vec![n_lo, n_hi].into(), Box::new(concl))
+        })))
+    });
+
+    println!("==== ADMIT: forall n, n > 0  ->  n < 1000  ->  n - 1 < 1000");
+    // (assert (bvugt n (_ bv0 64)))
+    // (assert (bvugt (_ bv1000 64) n))
+    // (assert (not (bvugt (_ bv1000 64) (bvsub n (_ bv1 64)))))
+    let arith_n_minus_1_lt_1000 = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let n = vars.fresh();
+            // n > 0
+            let n_lo = Prop::Nonzero(Term::cmpa(n, 0.into()));
+            // n < 1000
+            let n_hi = Prop::Nonzero(Term::cmpa(1000.into(), n));
+            // n + 1 > 1
+            let concl = Prop::Nonzero(Term::cmpa(1000.into(), Term::sub(n, 1.into())));
+            (vec![n_lo, n_hi].into(), Box::new(concl))
+        })))
+    });
+
+    println!("==== ADMIT: forall a b c, (a + b) + c == a + (b + c)");
+    // (assert (not (= (bvadd (bvadd a b) c) (bvadd a (bvadd b c)))))
+    let arith_add_assoc = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let a = vars.fresh();
+            let b = vars.fresh();
+            let c = vars.fresh();
+            let l = Term::add(Term::add(a, b), c);
+            let r = Term::add(a, Term::add(b, c));
+            let concl = Prop::Nonzero(Term::cmpe(l, r));
+            (vec![].into(), Box::new(concl))
+        })))
+    });
+
+
+    // Admit that `conc_state` is reachable.
     //
-    // We don't record this rule application since it's public, and the code duplicated explicitly
-    // in `interp_grit`.
+    // We don't record this rule application since it's public, and the code is duplicated
+    // explicitly in `interp_grit`.
     let p_conc = advice::dont_record(|| {
         pf.tactic_admit(Prop::Reachable(ReachableProp {
             pred: Binder::new(|_vars| {
@@ -104,7 +188,6 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
     // START OF SECRET PROOF
     // ----------------------------------------
-
 
     // Modify `p_conc` to match the premise of `p_loop`.
     pf.tactic_reach_extend(p_conc, |rpf| {
@@ -129,18 +212,18 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
 
     // We first prove a lemma of the form:
-    //      forall b n, n > 0 -> R({r12 = n}, b) -> R({r12 = n - 1}, b + 13)
+    //      forall b n, n > 1 -> R({r12 = n}, b) -> R({r12 = n - 1}, b + 13)
     // The proof is done by running symbolic execution.
     eprintln!("\nprove p_iter");
     let p_iter = pf.tactic_forall_intro(
         |vars| {
             // Set up the variables and premises.  There is only one variable, `n`, and only
-            // one premise, `n > 0`.  The `Term` representing `n` will be passed through to the
+            // one premise, `n > 1`.  The `Term` representing `n` will be passed through to the
             // proof callback.
             let b = vars.fresh();
             let n = vars.fresh();
             (vec![
-                Prop::Nonzero(Term::cmpa(n.clone(), 0.into())),
+                Prop::Nonzero(Term::cmpa(n.clone(), 1.into())),
                 Prop::Reachable(ReachableProp {
                     pred: Binder::new(|vars| {
                         let n = n.shift();
@@ -175,14 +258,13 @@ fn run(path: &str) -> Result<(), String> {
             //pf.show_context();
             let p_reach = (1, 1);
 
-            // From the premise `n > 0`, we can derive `n != 0`, which is needed to show that
+            // From the premise `n > 1`, we can derive `n - 1 != 0`, which is needed to show that
             // the jump is taken.
             //
             // We do this part early because the last lemma proved within this closure becomes
             // the conclusion of the `forall`.
-            // TODO: pf.rule_gt_ne_unsigned(n.clone(), 0.into())?;
-            let p_ne = pf.tactic_admit(
-                Prop::Nonzero(Term::cmpe(Term::cmpe(n.clone(), 0.into()), 0.into())));
+            let arith_n_minus_1_ne_0 = pf.tactic_clone(arith_n_minus_1_ne_0);
+            let p_ne = pf.tactic_apply(arith_n_minus_1_ne_0, &[n]);
             let (p_reach, p_ne) = pf.tactic_swap(p_reach, p_ne);
             let _ = p_ne;
 
@@ -192,9 +274,11 @@ fn run(path: &str) -> Result<(), String> {
 
                 // Symbolic execution through one iteration of the loop.
                 rpf.tactic_run();
-                rpf.rule_step_jump(true);
-                rpf.tactic_run();
                 rpf.rule_step_load_fresh();
+                rpf.tactic_run();
+                rpf.show_context();
+                rpf.show_state();
+                rpf.rule_step_jump(true);
                 rpf.tactic_run_until(conc_state.pc);
 
                 // Erase information about memory and certain registers to make it easier to
@@ -233,8 +317,8 @@ fn run(path: &str) -> Result<(), String> {
     //      forall n,
     //          n < 1000 ->
     //          forall b,
-    //              reach(b, {r12 = n}) ->
-    //              reach(b + n * 13, {r12 = 0})
+    //              reach(b, {r12 = n + 1}) ->
+    //              reach(b + n * 13, {r12 = 1})
     //
     // We separate the binders for `b` and `n` because `tactic_induction` expects to see only a
     // single bound variable (`n`) in `Hsucc`.
@@ -273,22 +357,23 @@ fn run(path: &str) -> Result<(), String> {
     let p_loop = pf.tactic_induction(
         Prop::Forall(Binder::new(|vars| {
             let n = vars.fresh();
-            let p = Prop::Nonzero(Term::cmpa(1000.into(), n));
+            //let p1 = Prop::Nonzero(Term::cmpa(n, 1.into()));
+            let p2 = Prop::Nonzero(Term::cmpa(1000.into(), n));
             let q = Prop::Forall(Binder::new(|vars| {
                 let n = n.shift();
                 let b = vars.fresh();
-                let p = mk_prop_reach(n, b);
-                let q = mk_prop_reach(0.into(), Term::add(b, Term::mull(n, 13.into())));
+                let p = mk_prop_reach(Term::add(n, 1.into()), b);
+                let q = mk_prop_reach(1.into(), Term::add(b, Term::mull(n, 13.into())));
                 (vec![p].into(), Box::new(q))
             }));
-            (vec![p].into(), Box::new(q))
+            (vec![p2].into(), Box::new(q))
         })),
         |pf| {
             //pf.show_context();
             pf.tactic_forall_intro(
                 |vars| {
                     let b = vars.fresh();
-                    let p = mk_prop_reach(0.into(), b);
+                    let p = mk_prop_reach(1.into(), b);
                     (vec![p], b)
                 },
                 |_pf, _b| {
@@ -301,27 +386,34 @@ fn run(path: &str) -> Result<(), String> {
                 |vars| {
                     let n = n.shift();
                     let b = vars.fresh();
-                    let p = mk_prop_reach(Term::add(n, 1.into()), b);
+                    let p = mk_prop_reach(Term::add(n, 2.into()), b);
                     (vec![p], b)
                 },
                 |pf, b| {
                     let n = n.shift();
                     let n_plus_1 = Term::add(n, 1.into());
-                    //pf.show_context();
+                    let n_plus_2 = Term::add(n, 2.into());
+
+                    let arith_n_plus_1_gt_1 = pf.tactic_clone(arith_n_plus_1_gt_1);
+                    let p_n_plus_2_gt_1 = pf.tactic_apply(arith_n_plus_1_gt_1,
+                        &[Term::add(n, 1.into())]);
 
                     let p_iter = pf.tactic_clone(p_iter);
-                    let _p_first = pf.tactic_apply(p_iter, &[b, n_plus_1]);
+                    let _p_first = pf.tactic_apply(p_iter, &[b, n_plus_2]);
 
-                    pf.tactic_admit(Prop::Nonzero(Term::cmpa(1000.into(), n)));
+                    let arith_n_minus_1_lt_1000 = pf.tactic_clone(arith_n_minus_1_lt_1000);
+                    pf.tactic_apply(arith_n_minus_1_lt_1000,
+                        &[Term::add(n, 1.into())]);
+
                     let p_ind = pf.tactic_clone((1, 1));
                     let p_rest = pf.tactic_apply0(p_ind);
 
+
                     let expected_cycles =
                         Term::add(b, Term::add(Term::mull(n, 13.into()), 13.into()));
-                    pf.tactic_admit(Prop::Nonzero(Term::cmpe(
-                        Term::add(Term::add(b, 13.into()), Term::mull(n, 13.into())),
-                        expected_cycles,
-                    )));
+                    let arith_add_assoc = pf.tactic_clone(arith_add_assoc);
+                    pf.tactic_apply(arith_add_assoc, &[b, 13.into(), Term::mull(n, 13.into())]);
+
                     let p_final = pf.tactic_apply(p_rest, &[Term::add(b, 13.into())]);
                     pf.tactic_reach_shrink(p_final, expected_cycles);
                 },
@@ -338,7 +430,7 @@ fn run(path: &str) -> Result<(), String> {
     eprintln!("\nprove p_exec");
 
     // Combine `p_conc` and `p_loop` to prove that the loop's final state is reachable.
-    let p_loop_n = pf.tactic_apply(p_loop, &[conc_state.regs[12].into()]);
+    let p_loop_n = pf.tactic_apply(p_loop, &[(conc_state.regs[12] - 1).into()]);
     pf.rule_trivial();
     let p_loop_n = pf.tactic_apply0(p_loop_n);
     let p_exec = pf.tactic_apply(p_loop_n, &[conc_state.cycle.into()]);
