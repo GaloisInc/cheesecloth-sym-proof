@@ -33,10 +33,11 @@ use sym_proof::symbolic::{self, MemState, MemSnapshot};
 // Initial snapshot
 
 #[derive(Clone, Debug)]
-struct CpuState {
+#[repr(C)]
+pub struct CpuState {
+    regs: [Word; NUM_REGS],
     pc: Word,
     cycle: Word,
-    regs: [Word; NUM_REGS],
 }
 
 
@@ -378,8 +379,15 @@ fn main() {
 
 #[cfg(feature = "microram")]
 #[no_mangle]
-fn main() {
+#[inline(never)]
+pub extern "C" fn __spontaneous_jump_dest() {
     run();
+}
+
+#[cfg(all(feature = "microram", feature = "microram_hardcoded_snapshot"))]
+#[no_mangle]
+pub extern "C" fn main() {
+    __spontaneous_jump_dest();
 }
 
 

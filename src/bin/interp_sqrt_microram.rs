@@ -33,24 +33,24 @@ use sym_proof::symbolic::{self, MemState, MemSnapshot};
 // Initial snapshot
 
 #[derive(Clone, Debug)]
+#[repr(C)]
 struct CpuState {
+    regs: [Word; NUM_REGS],
     pc: Word,
     cycle: Word,
-    regs: [Word; NUM_REGS],
 }
 
-static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
-    pc: 0,
-    cycle: 0,
-    regs: [0; NUM_REGS],
-};
+extern "C" {
+    #[link_name = "__spontaneous_jump_state"]
+    static mut SNAPSHOT_CPU_STATE: CpuState;
+}
 
 
 #[cfg(feature = "microram_hardcoded_snapshot")]
 mod emulate_snapshot_hardcoded {
     use sym_proof::{Addr, Word};
-    use sym_proof::micro_ram;
-    use super::{CpuState, SNAPSHOT_CPU_STATE};
+    use sym_proof::micro_ram::{self, NUM_REGS};
+    use super::CpuState;
     use super::hardcoded_snapshot;
 
     #[no_mangle]
@@ -63,6 +63,13 @@ mod emulate_snapshot_hardcoded {
             v
         }
     }
+
+    #[export_name = "__spontaneous_jump_state"]
+    static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
+        pc: 0,
+        cycle: 0,
+        regs: [0; NUM_REGS],
+    };
 
     pub unsafe fn init_snapshot() {
         unsafe {
@@ -83,7 +90,7 @@ mod emulate_snapshot {
     use std::collections::BTreeMap;
     use sym_proof::{Addr, Word};
     use sym_proof::micro_ram::{self, NUM_REGS};
-    use super::{CpuState, SNAPSHOT_CPU_STATE};
+    use super::CpuState;
 
     thread_local! {
         static SNAPSHOT_MEM: RefCell<BTreeMap<Addr, Word>> = RefCell::new(BTreeMap::new());
@@ -101,6 +108,13 @@ mod emulate_snapshot {
         SNAPSHOT_MEM_ADVICE.with(|rc| rc.borrow_mut().push((addr, value)));
         value
     }
+
+    #[export_name = "__spontaneous_jump_state"]
+    static mut SNAPSHOT_CPU_STATE: CpuState = CpuState {
+        pc: 0,
+        cycle: 0,
+        regs: [0; NUM_REGS],
+    };
 
     pub unsafe fn init_snapshot() {
         // Load the concrete state from disk so we don't need to rerun the concrete prefix.
@@ -395,7 +409,7 @@ fn main() {
 
 #[cfg(feature = "microram")]
 #[no_mangle]
-fn main() {
+pub extern "C" fn __spontaneous_jump_dest() {
     run();
 }
 
