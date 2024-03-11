@@ -77,7 +77,8 @@ mod emulate_snapshot {
         #[cfg(feature = "playback_concrete_state")]
         let conc_state: micro_ram::State = {
             use std::fs::File;
-            let f = File::open("advice/concrete_state.cbor").unwrap();
+            use sym_proof::advice;
+            let f = File::open(advice::advice_dir().join("concrete_state.cbor")).unwrap();
             serde_cbor::from_reader(f).unwrap()
         };
 
@@ -143,7 +144,7 @@ mod emulate_advice {
 
     pub unsafe fn load_advice() {
         // Load advice
-        let f = File::open("advice/linear.cbor").unwrap();
+        let f = File::open(advice::advice_dir().join("linear.cbor")).unwrap();
         let advice: Vec<_> = serde_cbor::from_reader(f).unwrap();
         ADVICE.with(|c| {
             *c.borrow_mut() = AdviceStream::new(advice);

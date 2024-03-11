@@ -1062,31 +1062,42 @@ pub mod playback {
 }
 
 
+#[cfg(not(feature = "microram"))]
+pub fn advice_dir() -> std::path::PathBuf {
+    std::env::var_os("SYM_PROOF_ADVICE_DIR").map_or_else(
+        || "advice".into(),
+        |v| v.into(),
+    )
+}
+
 #[cfg(not(feature = "microram_api"))]
 mod load_finish {
     // Helper functions in this module are used only when certain features are enabled.
     #![allow(dead_code)]
     #![allow(unused_imports)]
+    use alloc::borrow::ToOwned;
     use alloc::string::{String, ToString};
+    use std::env;
     use std::eprintln;
     use std::fs::{self, File};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use super::{
-        recording, playback, term_table, PlaybackStreamTag, RecordingStreamTag,
+        recording, playback, term_table, advice_dir, PlaybackStreamTag, RecordingStreamTag,
         ChunkedRecordingStreamTag,
     };
 
-    fn load_file(path: impl AsRef<Path>, ps: impl PlaybackStreamTag) -> Result<(), String> {
-        let path = path.as_ref();
-        let f = File::open(path).map_err(|x| x.to_string())?;
+
+    fn load_file(name: impl AsRef<Path>, ps: impl PlaybackStreamTag) -> Result<(), String> {
+        let path = advice_dir().join(name);
+        let f = File::open(&path).map_err(|x| x.to_string())?;
         ps.load(f).map_err(|x| x.to_string())?;
         eprintln!("loaded advice: {path:?}");
         Ok(())
     }
 
-    fn load_term_table_from_file(path: impl AsRef<Path>) -> Result<(), String> {
-        let path = path.as_ref();
-        let f = File::open(path).map_err(|x| x.to_string())?;
+    fn load_term_table_from_file(name: impl AsRef<Path>) -> Result<(), String> {
+        let path = advice_dir().join(name);
+        let f = File::open(&path).map_err(|x| x.to_string())?;
         term_table::playback::load(f).map_err(|x| x.to_string())?;
         eprintln!("loaded advice: {path:?}");
         Ok(())
@@ -1095,33 +1106,33 @@ mod load_finish {
     #[cfg(not(feature = "playback_linear"))]
     pub fn load() -> Result<(), String> {
         #[cfg(feature = "playback_rules")] {
-            load_file("advice/rules.cbor", playback::rules::Tag)?;
-            load_file("advice/props.cbor", playback::props::Tag)?;
-            load_file("advice/states.cbor", playback::states::Tag)?;
+            load_file("rules.cbor", playback::rules::Tag)?;
+            load_file("props.cbor", playback::props::Tag)?;
+            load_file("states.cbor", playback::states::Tag)?;
         }
         #[cfg(feature = "playback_terms")] {
-            load_file("advice/terms.cbor", playback::terms::Tag)?;
+            load_file("terms.cbor", playback::terms::Tag)?;
         }
         #[cfg(feature = "playback_term_table")] {
-            load_term_table_from_file("advice/term_table.cbor")?;
+            load_term_table_from_file("term_table.cbor")?;
         }
         #[cfg(feature = "playback_term_index")] {
-            load_file("advice/term_index.cbor", playback::term_index::Tag)?;
+            load_file("term_index.cbor", playback::term_index::Tag)?;
         }
         #[cfg(feature = "playback_term_intern_index")] {
-            load_file("advice/term_intern_index.cbor", playback::term_intern_index::Tag)?;
+            load_file("term_intern_index.cbor", playback::term_intern_index::Tag)?;
         }
         #[cfg(feature = "playback_search_index")] {
-            load_file("advice/search_index.cbor", playback::search_index::Tag)?;
+            load_file("search_index.cbor", playback::search_index::Tag)?;
         }
         #[cfg(feature = "playback_avec_len")] {
-            load_file("advice/avec_len.cbor", playback::avec_len::Tag)?;
+            load_file("avec_len.cbor", playback::avec_len::Tag)?;
         }
         #[cfg(feature = "playback_amap_keys")] {
-            load_file("advice/amap_keys.cbor", playback::amap_keys::Tag)?;
+            load_file("amap_keys.cbor", playback::amap_keys::Tag)?;
         }
         #[cfg(feature = "playback_amap_access")] {
-            load_file("advice/amap_access.cbor", playback::amap_access::Tag)?;
+            load_file("amap_access.cbor", playback::amap_access::Tag)?;
         }
 
         Ok(())
@@ -1129,70 +1140,75 @@ mod load_finish {
 
     #[cfg(feature = "playback_linear")]
     pub fn load() -> Result<(), String> {
-        load_file("advice/linear.cbor", playback::linear::Tag)?;
+        load_file("linear.cbor", playback::linear::Tag)?;
         #[cfg(feature = "playback_term_table")] {
-            load_term_table_from_file("advice/term_table.cbor")?;
+            load_term_table_from_file("term_table.cbor")?;
         }
         Ok(())
     }
 
 
-    fn finish_file(path: impl AsRef<Path>, rs: impl RecordingStreamTag) -> Result<(), String> {
-        let path = path.as_ref();
-        let f = File::create(path).map_err(|x| x.to_string())?;
+    fn finish_file(name: impl AsRef<Path>, rs: impl RecordingStreamTag) -> Result<(), String> {
+        let dir = advice_dir();
+        fs::create_dir_all(&dir).map_err(|x| x.to_string())?;
+        let path = dir.join(name);
+        let f = File::create(&path).map_err(|x| x.to_string())?;
         rs.finish(f).map_err(|x| x.to_string())?;
         eprintln!("saved advice: {path:?}");
         Ok(())
     }
 
     fn finish_file_chunked(
-        path: impl AsRef<Path>,
+        name: impl AsRef<Path>,
         crs: impl ChunkedRecordingStreamTag,
     ) -> Result<(), String> {
-        let path = path.as_ref();
-        let f = File::create(path).map_err(|x| x.to_string())?;
+        let dir = advice_dir();
+        fs::create_dir_all(&dir).map_err(|x| x.to_string())?;
+        let path = dir.join(name);
+        let f = File::create(&path).map_err(|x| x.to_string())?;
         crs.finish(f).map_err(|x| x.to_string())?;
         eprintln!("saved advice: {path:?}");
         Ok(())
     }
 
     pub fn finish() -> Result<(), String> {
-        fs::create_dir_all("advice").map_err(|x| x.to_string())?;
-
         #[cfg(feature = "recording_rules")] {
-            finish_file("advice/rules.cbor", recording::rules::Tag)?;
-            finish_file("advice/props.cbor", recording::props::Tag)?;
-            finish_file("advice/states.cbor", recording::states::Tag)?;
+            finish_file("rules.cbor", recording::rules::Tag)?;
+            finish_file("props.cbor", recording::props::Tag)?;
+            finish_file("states.cbor", recording::states::Tag)?;
         }
         #[cfg(feature = "recording_terms")] {
-            finish_file("advice/terms.cbor", recording::terms::Tag)?;
+            finish_file("terms.cbor", recording::terms::Tag)?;
         }
         #[cfg(feature = "recording_term_table")] {
-            let path = "advice/term_table.cbor";
-            let f = File::create(path).map_err(|x| x.to_string())?;
+            let name = "term_table.cbor";
+            let dir = advice_dir();
+            fs::create_dir_all(&dir).map_err(|x| x.to_string())?;
+            let path = dir.join(name);
+            let f = File::create(&path).map_err(|x| x.to_string())?;
             term_table::recording::finish(f).map_err(|x| x.to_string())?;
             eprintln!("saved advice: {path:?}");
         }
         #[cfg(feature = "recording_term_index")] {
-            finish_file("advice/term_index.cbor", recording::term_index::Tag)?;
+            finish_file("term_index.cbor", recording::term_index::Tag)?;
         }
         #[cfg(feature = "recording_term_intern_index")] {
-            finish_file("advice/term_intern_index.cbor", recording::term_intern_index::Tag)?;
+            finish_file("term_intern_index.cbor", recording::term_intern_index::Tag)?;
         }
         #[cfg(feature = "recording_search_index")] {
-            finish_file("advice/search_index.cbor", recording::search_index::Tag)?;
+            finish_file("search_index.cbor", recording::search_index::Tag)?;
         }
         #[cfg(feature = "recording_avec_len")] {
-            finish_file_chunked("advice/avec_len.cbor", recording::avec_len::Tag)?;
+            finish_file_chunked("avec_len.cbor", recording::avec_len::Tag)?;
         }
         #[cfg(feature = "recording_amap_keys")] {
-            finish_file_chunked("advice/amap_keys.cbor", recording::amap_keys::Tag)?;
+            finish_file_chunked("amap_keys.cbor", recording::amap_keys::Tag)?;
         }
         #[cfg(feature = "recording_amap_access")] {
-            finish_file("advice/amap_access.cbor", recording::amap_access::Tag)?;
+            finish_file("amap_access.cbor", recording::amap_access::Tag)?;
         }
         #[cfg(feature = "recording_linear")] {
-            finish_file("advice/linear.cbor", recording::linear::Tag)?;
+            finish_file("linear.cbor", recording::linear::Tag)?;
         }
 
         Ok(())
