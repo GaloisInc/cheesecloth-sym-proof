@@ -73,8 +73,9 @@ pub fn playback_proof(pf: &mut Proof, ps: impl PlaybackStreamTag) {
                 break;
             },
             Rule::Admit => {
-                let prop = ps.playback::<Prop>();
-                pf.rule_admit(prop);
+                die!("Rule::Admit is not allowed in secret proofs");
+                //let prop = ps.playback::<Prop>();
+                //pf.rule_admit(prop);
             },
             Rule::Trivial => {
                 pf.rule_trivial();
