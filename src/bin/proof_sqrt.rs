@@ -69,7 +69,7 @@ fn run(path: &str) -> Result<(), String> {
 
     let mut conc_state = init_state;
     let mut step_index = 0;
-    let loop_label = exec.labels.keys().find(|s| s.starts_with(".LBB829_731#")).unwrap();
+    let loop_label = exec.labels.keys().find(|s| s.starts_with(".LBB848_731#")).unwrap();
     let loop_addr = exec.labels[loop_label];
 
     eprintln!("=== Concrete execution until pc={} ", loop_addr);
