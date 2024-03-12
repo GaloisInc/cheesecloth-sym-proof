@@ -1,4 +1,6 @@
 use core::convert::{TryFrom, TryInto};
+use core::ops::{Deref, DerefMut};
+use cheesecloth_sym_proof_secret_decls as secret_decls;
 use crate::BinOp;
 use crate::logic::{Term, TermKind, VarId};
 use serde::{Serialize, Deserialize};
@@ -22,13 +24,21 @@ pub use self::playback_microram as playback;
 /// either as an index or as a pointer.  `recording` uses indices, while `playback` uses pointers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
 #[serde(from = "SerializeRawTermKind", into = "SerializeRawTermKind")]
-pub struct RawTermKind {
-    pub tag: usize,
-    pub x: *const u8,
-    pub y: *const u8,
-    pub z: *const u8,
+#[repr(transparent)]
+pub struct RawTermKind(secret_decls::RawTermKind);
+
+impl Deref for RawTermKind {
+    type Target = secret_decls::RawTermKind;
+    fn deref(&self) -> &secret_decls::RawTermKind {
+        &self.0
+    }
 }
-unsafe impl Sync for RawTermKind {}
+
+impl DerefMut for RawTermKind {
+    fn deref_mut(&mut self) -> &mut secret_decls::RawTermKind {
+        &mut self.0
+    }
+}
 
 impl RawTermKind {
     const TAG_CONST: usize = 0;
@@ -60,12 +70,12 @@ impl From<RawTermKind> for SerializeRawTermKind {
 
 impl From<SerializeRawTermKind> for RawTermKind {
     fn from(k: SerializeRawTermKind) -> RawTermKind {
-        RawTermKind {
+        RawTermKind(secret_decls::RawTermKind {
             tag: k.tag,
             x: k.x as *const u8,
             y: k.y as *const u8,
             z: k.z as *const u8,
-        }
+        })
     }
 }
 
@@ -138,7 +148,7 @@ impl RawTermKind {
                 convert_term(c),
             ),
         };
-        RawTermKind { tag, x, y, z }
+        RawTermKind(secret_decls::RawTermKind { tag, x, y, z })
     }
 
     /// Modify all sub-`Term` pointers in-place by applying `f` to each one.

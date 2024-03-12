@@ -2,35 +2,34 @@
 //! having a `load` function to initialize the table, the table is provided as an `extern "C"`
 //! symbol defined in a secret segment.
 use core::cell::RefCell;
-use alloc::boxed::Box;
 use core::mem;
+use alloc::boxed::Box;
+use cheesecloth_sym_proof_secret_decls as secret_decls;
 use crate::logic::TermKind;
 use super::RawTermKind;
 
 
-// TODO
-const TERM_TABLE_CAPACITY: usize = 65536;
-
-extern "C" {
-    static TERM_TABLE: [RawTermKind; TERM_TABLE_CAPACITY];
-    static TERM_TABLE_LEN: usize;
-}
-
-// FIXME: validate TABLE_LEN <= TABLE_CAPACITY
-// FIXME: validate entries in TABLE
-
+/*
 pub fn len() -> usize {
     unsafe { TERM_TABLE_LEN }
 }
+*/
 
-fn table() -> &'static [RawTermKind] {
-    unsafe {
-        &*TERM_TABLE.get_unchecked(..TERM_TABLE_LEN)
-    }
+pub fn len() -> usize {
+    secret_decls::table().len()
+}
+
+fn get_index_helper(index: usize) -> &'static secret_decls::RawTermKind {
+    &secret_decls::table()[index]
 }
 
 pub fn get_index(index: usize) -> &'static RawTermKind {
-    &table()[index]
+    unsafe {
+        let ptr = get_index_helper(index);
+        // This transmute is valid because `RawTermKind` is a `repr(transparent)` wrapper around
+        // `secret_decls::RawTermKind`.
+        mem::transmute::<&'static secret_decls::RawTermKind, &'static RawTermKind>(ptr)
+    }
 }
 
 /// Convert a `RawTermKind` to a `TermKind`.  This is safe only for `RawTermKind`s returned by

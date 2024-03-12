@@ -7,13 +7,13 @@
 # Generate rust source files for the program and secrets
 mkdir -p gen
 python3 prog_to_rust.py traces/sqrt.cbor >gen/sqrt_program.rs
-python3 term_table_to_rust.py advice/term_table.cbor >gen/sqrt_term_table.rs
+python3 term_table_to_rust.py advice/term_table.cbor >gen/term_table.rs
 
 # Test interpreter with final advice
-cargo run --bin interp_sqrt_microram --features microram_api,verbose
+cargo run --bin interp_sqrt_microram --features microram_api,verbose,inline-secrets
 # Test again, emulating spontaneous-jump snapshot behavior
 python3 hardcoded_snapshot_to_rust.py advice/hardcoded_snapshot.cbor >gen/sqrt_hardcoded_snapshot.rs
-cargo run --bin interp_sqrt_microram --features microram_api,verbose,microram_hardcoded_snapshot
+cargo run --bin interp_sqrt_microram --features microram_api,verbose,inline-secrets,microram_hardcoded_snapshot
 
 # Build RISC-V assembly file for use with MicroRAM
 ./build_microram.sh sqrt

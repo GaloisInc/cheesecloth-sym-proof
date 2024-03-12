@@ -196,6 +196,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cheesecloth-sym-proof-secret-decls"
+version = "0.1.0"
+
+[[package]]
+name = "cheesecloth-sym-proof-secrets"
+version = "0.1.0"
+dependencies = [
+ "cheesecloth-sym-proof-secret-decls",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -938,6 +949,8 @@ dependencies = [
  "bumpalo",
  "cheesecloth",
  "cheesecloth-alloc",
+ "cheesecloth-sym-proof-secret-decls",
+ "cheesecloth-sym-proof-secrets",
  "env_logger",
  "log",
  "serde",

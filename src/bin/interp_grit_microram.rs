@@ -9,12 +9,14 @@
 #![cfg_attr(feature = "microram", feature(lang_items))]
 
 extern crate alloc;
+#[cfg(feature = "inline-secrets")] extern crate cheesecloth_sym_proof_secrets;
 
 use core::mem;
 use core::ptr;
 use alloc::boxed::Box;
 use alloc::vec;
 #[cfg(feature = "microram")] use cheesecloth_alloc;
+use cheesecloth_sym_proof_secret_decls as secret_decls;
 use sym_proof::Word;
 use sym_proof::advice;
 use sym_proof::interp;
@@ -24,7 +26,6 @@ use sym_proof::micro_ram::{Program, NUM_REGS};
 use sym_proof::symbolic::{self, MemState, MemSnapshot};
 
 #[path = "../../gen/grit_program.rs"] mod program;
-#[path = "../../gen/grit_term_table.rs"] mod term_table;
 
 #[cfg(feature = "microram_hardcoded_snapshot")]
 #[path = "../../gen/grit_hardcoded_snapshot.rs"] mod hardcoded_snapshot;
@@ -268,6 +269,8 @@ fn fail() -> ! {
 
 fn run() -> ! {
     unsafe { init_snapshot() };
+
+    secret_decls::validate();
 
     let prog = Program::new(&program::PROG_INSTRS, &program::PROG_CHUNKS);
 

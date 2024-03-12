@@ -6,15 +6,21 @@ name=$1
 src_dir="$(cd "$(dirname "$0")" && pwd)"
 build_dir="$src_dir/build"
 
-mkdir -p "$build_dir/cargo"
-python3 gen_microram_cargo_toml.py <"$src_dir/Cargo.toml" >"$build_dir/cargo/Cargo.toml"
+(
+    mkdir -p "$build_dir/cargo"
+    python3 gen_microram_cargo_toml.py \
+        "$src_dir/Cargo.toml" \
+        "$build_dir/cargo/Cargo.toml"
 
-cd "$build_dir/cargo"
-cargo +1.56.0 update
+    cd "$build_dir/cargo"
+    cargo +1.56.0 update
 
-cc_secret_objects= \
     features=microram,${cc_extra_features:-} \
-    keep_symbols=__spontaneous_jump_dest \
-    "$src_dir/../rust-support/build_microram.sh" interp_${name}_microram
+        "$src_dir/../rust-support/build_microram.sh" secrets secrets
 
-cp build/interp_${name}_microram.{bc,ll,s} "$build_dir"
+    features=microram,${cc_extra_features:-} \
+        keep_symbols=__spontaneous_jump_dest \
+        "$src_dir/../rust-support/build_microram.sh" interp_${name}_microram
+
+    cp build/interp_${name}_microram.{bc,ll,s} "$build_dir"
+)
