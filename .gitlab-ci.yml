@@ -26,4 +26,4 @@ build-and-test:
     - git clone https://gitlab-ext.galois.com/fromager/cheesecloth/cheesecloth.git ../cheesecloth
     - ln -s cheesecloth/rust-support ../rust-support
     - cargo check --features verbose
-    - cargo run --features verbose --release --bin proof_grit -- traces/grit.cbor
+    - cargo run --features verbose --bin proof_grit -- traces/grit.cbor

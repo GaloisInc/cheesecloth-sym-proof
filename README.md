@@ -39,3 +39,19 @@ in the MicroRAM compiler.  Things named `__cc_foo` are usually intrinsics.  But
 if there are (for example) Rust standard library functions in the list, then
 there is probably an issue with the build script.
 
+
+## Debug vs. release builds
+
+Always use debug builds during development.  Debug builds use `opt-level = 1`,
+so they should still be reasonably fast.  We use the release profile for
+MicroRAM builds, which have special requirements, and as a result, some
+binaries (including `proof_grit` and `proof_sqrt`) will break when built with
+`--release`.
+
+If you really want to do a release build, temporarily comment out the
+`panic = "abort"` line in `Cargo.toml`.
+
+We can't use Cargo's custom profile feature because MicroRAM builds are done
+with an older toolchain.  Specifically, MicroRAM builds require rustc 1.56.0,
+which is the last release with LLVM 13, the highest LLVM version that's
+compatible with the rest of our toolchain.
