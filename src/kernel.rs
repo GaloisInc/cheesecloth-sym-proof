@@ -1,15 +1,16 @@
-use std::array;
-use std::borrow::Cow;
-use std::convert::TryFrom;
-use std::fmt::{Display, Write as _};
-use std::iter;
-use std::mem;
-use std::ops::{Deref, DerefMut};
+use core::convert::TryFrom;
+use core::iter;
+use core::mem;
+use core::ops::{Deref, DerefMut};
+use alloc::{format, vec};
+use alloc::borrow::Cow;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
+#[cfg(feature = "verbose")] use std::{println, eprintln};
 use crate::{Word, Addr};
 use crate::advice;
 use crate::advice::vec::AVec;
-#[allow(unused)] use crate::advice::{PlaybackStreamTag, RecordingStreamTag};
-use crate::interp::{Rule, ReachRule};
 use crate::logic::{Prop, Term, Binder, VarCounter, ReachableProp, StatePred};
 use crate::logic::eq_shifted::EqShifted;
 use crate::logic::print::{Print, Printer, DisplayWithPrinter};
@@ -18,16 +19,19 @@ use crate::logic::shift::ShiftExt;
 use crate::logic::wf::WfExt;
 use crate::micro_ram::{Instr, Opcode, Reg, Operand, MemWidth, Program};
 use crate::symbolic::{self, Memory, MemState, MemConcrete, MemMap, MemLog};
+#[cfg(feature = "recording_rules")]
+use crate::interp::{Rule, ReachRule};
 
 
-#[cfg(any(feature = "recording_rules", feature = "recording_term_index"))]
+#[cfg(feature = "recording_rules")]
 macro_rules! record {
     ($($x:expr),*) => {{
+        use crate::advice::RecordingStreamTag;
         $( advice::recording::rules::Tag.record(&$x); )*
     }};
 }
 
-#[cfg(not(any(feature = "recording_rules", feature = "recording_term_index")))]
+#[cfg(not(feature = "recording_rules"))]
 macro_rules! record {
     ($($x:expr),*) => {{
     }};
@@ -35,10 +39,10 @@ macro_rules! record {
 
 macro_rules! require_ok {
     ($x:expr) => {
-        $x.unwrap_or_else(|e| die!("error: {e}"))
+        $x.unwrap_or_else(|e| die!("error: {}", e))
     };
     ($x:expr, $($args:tt)*) => {
-        $x.unwrap_or_else(|e| die!("{}: {e}", format_args!($($args)*)))
+        $x.unwrap_or_else(|e| die!("{}: {}", format_args!($($args)*), e))
     };
 }
 
@@ -223,13 +227,6 @@ impl<'a> Proof<'a> {
     }
 
 
-    fn prop_ptr(p: &Prop) -> *const () {
-        match *p {
-            Prop::Nonzero(ref t) => t.as_ptr(),
-            _ => std::ptr::null(),
-        }
-    }
-
     /// Ensure that `premise` appears somewhere in the current context.  Panics if a matching
     /// `Prop` is not found.
     fn require_premise(&self, premise: &Prop) {
@@ -247,6 +244,7 @@ impl<'a> Proof<'a> {
         premises: [&dyn Fn() -> Cow<'b, Prop>; N],
     ) {
         #[cfg(feature = "playback_search_index")] {
+            use crate::advice::PlaybackStreamTag;
             let ps = advice::playback::search_index::Tag;
 
             let (k, premise_fn) = ps.take_index_and_elem(&premises);
@@ -268,58 +266,66 @@ impl<'a> Proof<'a> {
             return;
         }
 
-        let premises: [Cow<Prop>; N] = array::from_fn(|i| premises[i]());
-        let premises: [&Prop; N] = array::from_fn(|i| &*premises[i]);
+        #[cfg(not(feature = "playback_search_index"))] {
+            use core::array;
+            let premises: [Cow<Prop>; N] = array::from_fn(|i| premises[i]());
+            let premises: [&Prop; N] = array::from_fn(|i| &*premises[i]);
 
-        let check = |prop, shift_amount| {
-            for (k, &expect_prop) in premises.iter().enumerate() {
-                if expect_prop.eq_shifted(prop, shift_amount) {
-                    return Some(k);
+            let check = |prop, shift_amount| {
+                for (k, &expect_prop) in premises.iter().enumerate() {
+                    if expect_prop.eq_shifted(prop, shift_amount) {
+                        return Some(k);
+                    }
                 }
-            }
-            None
-        };
+                None
+            };
 
-        for (j, prop) in self.cur.props.iter().enumerate() {
-            if let Some(k) = check(prop, 0) {
-                #[cfg(feature = "recording_search_index")] {
-                    let rs = advice::recording::search_index::Tag;
-                    rs.record(&k);
-                    rs.record(&true);
-                    rs.record(&j);
-                }
-                return;
-            }
-        }
-
-        for (i, s) in self.scopes.iter().enumerate().rev() {
-            let shift_amount = (self.scopes.len() - i) as u32;
-            for (j, prop) in s.props.iter().enumerate() {
-                if let Some(k) = check(prop, shift_amount) {
+            for (j, prop) in self.cur.props.iter().enumerate() {
+                if let Some(k) = check(prop, 0) {
                     #[cfg(feature = "recording_search_index")] {
+                        use crate::advice::RecordingStreamTag;
                         let rs = advice::recording::search_index::Tag;
                         rs.record(&k);
-                        rs.record(&false);
-                        rs.record(&i);
+                        rs.record(&true);
                         rs.record(&j);
                     }
+                    let _ = (j, k);
                     return;
                 }
             }
-        }
 
-        #[cfg(feature = "verbose")] {
-            let mut desc = String::new();
-            for (i, p) in premises.iter().enumerate() {
-                if i > 0 {
-                    desc.push_str(" or ");
+            for (i, s) in self.scopes.iter().enumerate().rev() {
+                let shift_amount = (self.scopes.len() - i) as u32;
+                for (j, prop) in s.props.iter().enumerate() {
+                    if let Some(k) = check(prop, shift_amount) {
+                        #[cfg(feature = "recording_search_index")] {
+                            use crate::advice::RecordingStreamTag;
+                            let rs = advice::recording::search_index::Tag;
+                            rs.record(&k);
+                            rs.record(&false);
+                            rs.record(&i);
+                            rs.record(&j);
+                        }
+                        let _ = (i, j, k);
+                        return;
+                    }
                 }
-                write!(desc, "{}", self.print(p)).unwrap();
             }
-            die!("missing premise: {}", desc);
-        }
-        #[cfg(not(feature = "verbose"))] {
-            die!("missing premise");
+
+            #[cfg(feature = "verbose")] {
+                use core::fmt::Write;
+                let mut desc = String::new();
+                for (i, p) in premises.iter().enumerate() {
+                    if i > 0 {
+                        desc.push_str(" or ");
+                    }
+                    write!(desc, "{}", self.print(p)).unwrap();
+                }
+                die!("missing premise: {}", desc);
+            }
+            #[cfg(not(feature = "verbose"))] {
+                die!("missing premise");
+            }
         }
     }
 
@@ -670,7 +676,9 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     #[cfg(feature = "debug_symbolic")]
     pub fn print_conc_st(&self) {
-        eprintln!("CONCRETE REGS: {:?}",self.state.conc_st.clone().map(|st| st.regs));
+        #[cfg(all(feature = "verbose", not(feature = "microram_api")))] {
+            eprintln!("CONCRETE REGS: {:?}",self.state.conc_st.clone().map(|st| st.regs));
+        }
     }
 
     fn get_instr_at(&self, pc:Addr) -> Instr {
@@ -774,15 +782,15 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
             Opcode::Jmp => {
                 let dest = y.as_const_or_err()
-                    .unwrap_or_else(|e| die!("error evaluating jmp dest: {e}"));
+                    .unwrap_or_else(|e| die!("error evaluating jmp dest: {}", e));
                 self.finish_instr_jump(dest);
                 return;
             },
             Opcode::Cjmp => {
                 let cond = x.as_const_or_err()
-                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
+                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {}", e));
                 let dest = y.as_const_or_err()
-                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
+                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {}", e));
                 if cond == 0 {
                     self.finish_instr();
                     return;
@@ -793,9 +801,9 @@ impl<'a, 'b> ReachProof<'a, 'b> {
             },
             Opcode::Cnjmp => {
                 let cond = x.as_const_or_err()
-                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
+                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {}", e));
                 let dest = y.as_const_or_err()
-                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
+                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {}", e));
                 if cond != 0 {
                     self.finish_instr();
                     return;
@@ -835,6 +843,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Try to take a step.  Returns `true` on success or `false` if `rule_step` panics.  On
     /// failure, the proof state remains unchanged.
+    #[cfg(not(feature = "microram_api"))]
     pub fn try_rule_step(&mut self) -> Result<(),String> {
         use std::panic::{self, AssertUnwindSafe};
 
@@ -874,6 +883,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     /// constant. On loads, it can still sneak symbolic values from
     /// memory into registers. On failure, the proof state remains
     /// unchanged.
+    #[cfg(not(feature = "microram_api"))]
     pub fn try_rule_step_concrete(&mut self) -> Result<(),String> {
         let instr = self.fetch_instr();
         let x = self.reg_value(instr.r1);
@@ -922,7 +932,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
         if taken {
             let dest = y.as_const_or_err()
-                .unwrap_or_else(|e| die!("error evaluating jmp dest: {e}"));
+                .unwrap_or_else(|e| die!("error evaluating jmp dest: {}", e));
             #[cfg(feature = "verbose")] {
                 println!("run {}: {:?} (jump, taken)", self.pc(), instr);
             }

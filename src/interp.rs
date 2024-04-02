@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 use crate::Addr;
 use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 use crate::kernel::{Proof, ReachProof, PropId};
@@ -47,7 +49,7 @@ impl Record for Rule {
 
 impl Playback for Rule {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        Rule::from_raw(ps.playback())
+        Rule::from_raw(ps.take_bounded(ReachRule::COUNT as u64 - 1) as u8)
     }
 }
 
@@ -59,7 +61,7 @@ impl Record for ReachRule {
 
 impl Playback for ReachRule {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        ReachRule::from_raw(ps.playback())
+        ReachRule::from_raw(ps.take_bounded(ReachRule::COUNT as u64 - 1) as u8)
     }
 }
 
@@ -71,8 +73,9 @@ pub fn playback_proof(pf: &mut Proof, ps: impl PlaybackStreamTag) {
                 break;
             },
             Rule::Admit => {
-                let prop = ps.playback::<Prop>();
-                pf.rule_admit(prop);
+                die!("Rule::Admit is not allowed in secret proofs");
+                //let prop = ps.playback::<Prop>();
+                //pf.rule_admit(prop);
             },
             Rule::Trivial => {
                 pf.rule_trivial();

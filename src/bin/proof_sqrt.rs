@@ -9,19 +9,21 @@
 // The proof implementation returns `Err` when a rule fails to apply.  A bad proof will be caught
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
-use std::array;
+#![cfg_attr(feature = "deny_warnings", deny(warnings))]
+use core::array;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use env_logger;
 use log::trace;
-use sym_proof::{Word, Addr};
+use sym_proof::Addr;
+use sym_proof::advice;
 use sym_proof::kernel::Proof;
-use sym_proof::logic::{Term, TermKind, Prop, Binder, VarCounter, ReachableProp, StatePred};
+use sym_proof::logic::{Term, Prop, Binder, ReachableProp, StatePred};
 use sym_proof::logic::shift::ShiftExt;
-use sym_proof::micro_ram::Program;
+use sym_proof::micro_ram::{Program, NUM_REGS};
 use sym_proof::micro_ram::import;
-use sym_proof::micro_ram::{Opcode, MemWidth, mem_load};
-use sym_proof::symbolic::{self, MemState, MemSnapshot, Memory, MemMap, MemConcrete};
+use sym_proof::micro_ram::Opcode;
+use sym_proof::symbolic::{self, MemState, MemSnapshot};
 use sym_proof::tactics::{Tactics, ReachTactics};
 use witness_checker::micro_ram::types::Advice;
 
@@ -42,17 +44,21 @@ fn run(path: &str) -> Result<(), String> {
     // Load advice
     // ----------------------------------------
 
-
     eprintln!("=== Load advice");
-    let mut advs:HashMap<u64, u64> = HashMap::new();
+    let mut advise_values = HashMap::<u64, u64>::new();
+    let mut stutters = HashSet::<u64>::new();
     // Iterate through all the advices (i.e. MemOps, Stutter, Advice)
     // and only keep the `Advice` ones.
-    for (key, advice_vec) in exec.advice.iter() {
+    for (&step_index, advice_vec) in exec.advice.iter() {
         for advice in advice_vec {
-            if let Advice::Advise { advise } = advice {
-                // Extract the value from the Advise variant
-                // and store it in the new HashMap
-                advs.insert(*key, *advise);
+            match *advice {
+                Advice::Advise { advise } => {
+                    advise_values.insert(step_index, advise);
+                },
+                Advice::Stutter => {
+                    stutters.insert(step_index);
+                },
+                _ => {},
             }
         }
     }
@@ -62,125 +68,143 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
 
     let mut conc_state = init_state;
-    let loop_label = ".LBB831_734#20819";
+    let mut step_index = 0;
+    let loop_label = exec.labels.keys().find(|s| s.starts_with(".LBB848_731#")).unwrap();
     let loop_addr = exec.labels[loop_label];
 
     eprintln!("=== Concrete execution until pc={} ", loop_addr);
     while conc_state.pc != loop_addr {
+        // Increment early.  The first step's advice is at index 1, not 0.
+        step_index += 1;
+        if stutters.contains(&step_index) {
+            continue;
+        }
         let conc_pc : Addr = conc_state.pc;
         let instr = prog[conc_pc];
-        let cyc = conc_state.cycle;
-        // For some reason the cycle is off by one wrt advice
-        let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
+        let adv: Option<u64> = advise_values.get(&step_index).copied();
+        //eprintln!("step: {:?}, {:?}", instr, adv);
         conc_state.step(instr, adv);
+        //eprintln!("stepped: pc = {}, cyc = {}", conc_state.pc, conc_state.cycle);
     }
     eprintln!("\tConcretely reached {} in {} cycle.", conc_state.pc, conc_state.cycle);
 
-    // Run two loop iterations to normalize the state of memory and get back to the start.  While
-    // running, we also record addresses in memory that are loaded or stored during the loop.
-    let mut load_addrs = Vec::new();
-    let mut store_addrs = Vec::new();
-    let mut all_addrs = Vec::new();
-    let start_cycle = conc_state.cycle;
-    for _ in 0 .. 2 {
-        loop {
-            let instr = prog[conc_state.pc];
-            let cyc = conc_state.cycle;
-            let adv: Option<u64> = advs.get(&(cyc + 1)).cloned();
+    // ----------------------------------------
+    // Identify live memory
+    // ----------------------------------------
 
-            match instr.opcode {
-                Opcode::Load(w) => {
-                    let addr = conc_state.operand_value(instr.op2);
-                    load_addrs.push((addr, w));
-                    all_addrs.push((addr, w));
-                },
-                Opcode::Store(w) => {
-                    let addr = conc_state.operand_value(instr.op2);
-                    store_addrs.push((addr, w));
-                    all_addrs.push((addr, w));
-                },
-                _ => ()
+    /// Run this many iterations concretely before switching to symbolic execution.  This must
+    /// be enough iterations to get the state of registers and memory to stabilize.
+    ///
+    /// When running MicroRAM, this number should be used as the count for `--spontaneous-jump`.
+    const NUM_CONCRETE_ITERS: usize = 1;
+
+    let live_addrs = {
+        let outer_conc_state = &mut conc_state;
+        let outer_step_index = &mut step_index;
+
+        // Create a copy of the state that we can freely modify.
+        let mut conc_state = outer_conc_state.clone();
+        let mut step_index = *outer_step_index;
+
+        let mut live_addrs = Vec::new();
+        // A set for deduplicating `live_addrs` entries.
+        let mut live_addrs_set = HashSet::new();
+        // Bytes that have been written, making them no longer live-in.
+        let mut written_bytes = HashSet::new();
+
+        for i in 0 .. 4 {
+            let old_live_addrs = live_addrs.clone();
+            let old_live_mem = old_live_addrs.iter()
+                .map(|&(addr, w)| conc_state.mem_load(w, addr))
+                .collect::<Vec<_>>();
+
+            if i == NUM_CONCRETE_ITERS {
+                *outer_conc_state = conc_state.clone();
+                *outer_step_index = step_index;
             }
 
-            conc_state.step(instr, adv);
+            // Run one iteration of the loop.
+            loop {
+                step_index += 1;
+                if stutters.contains(&step_index) {
+                    continue;
+                }
+                let instr = prog[conc_state.pc];
+                let adv: Option<u64> = advise_values.get(&step_index).copied();
 
-            if conc_state.pc == loop_addr {
-                break;
-            }
-        }
-    }
-    eprintln!("load_addrs size: {}", load_addrs.len());
-    eprintln!("store_addrs size: {}", store_addrs.len());
-    eprintln!("all_addrs size: {}", all_addrs.len());
+                match instr.opcode {
+                    Opcode::Load(w) => {
+                        let addr = conc_state.operand_value(instr.op2);
+                        let all_written = (0 .. w.bytes()).all(|b| {
+                            written_bytes.contains(&(addr + b))
+                        });
+                        if !all_written {
+                            if live_addrs_set.insert((addr, w)) {
+                                eprintln!("live_addrs: read {:x} ({:?}) at pc = {}",
+                                    addr, w, conc_state.pc);
+                                live_addrs.push((addr, w));
+                            }
+                        }
+                    },
+                    Opcode::Store(w) => {
+                        let addr = conc_state.operand_value(instr.op2);
+                        for b in 0 .. w.bytes() {
+                            written_bytes.insert(addr + b);
+                        }
+                    },
+                    _ => ()
+                }
 
-    // Postprocess `all_addrs` by removing entries that are overwritten later.
-    let all_addrs = {
-        // Process stores in reverse order, so if write `i` is overwritten by `j`, `j` will be seen
-        // first.
-        let mut bytes_touched = HashSet::new();
-        let mut addrs_rev = Vec::new();
-        let iter = store_addrs.into_iter().rev()
-            .chain(load_addrs.into_iter().rev());
-        for (addr, w) in iter {
-            let mut all_touched = true;
-            for b in 0 .. w.bytes() {
-                let untouched = bytes_touched.insert(addr + b);
-                if untouched {
-                    all_touched = false;
+                conc_state.step(instr, adv);
+
+                if conc_state.pc == loop_addr {
+                    break;
                 }
             }
-            if all_touched {
-                continue;
+
+            if live_addrs != old_live_addrs {
+                eprintln!("iteration {}: live addrs changed", i);
+            } else {
+                let live_mem = live_addrs.iter()
+                    .map(|&(addr, w)| conc_state.mem_load(w, addr))
+                    .collect::<Vec<_>>();
+                if live_mem != old_live_mem {
+                    eprintln!("iteration {}: memory changed:", i);
+                    let iter = live_addrs.iter().zip(
+                        old_live_mem.iter().zip(live_mem.iter()));
+                    for (&(addr, w), (&val1, &val2)) in iter {
+                        if val1 != val2 {
+                            eprintln!("  {:x},{:?}: {:x} -> {:x}", addr, w, val1, val2);
+                        }
+                    }
+                }
             }
-            addrs_rev.push((addr, w));
         }
 
-        addrs_rev.reverse();
-        addrs_rev
+        live_addrs
     };
 
-
-    // ----------------------------------------
-    // For diagnostics on registers
-    // Change num_loops=10 to see what
-    // registers change and which ones don't
-    // ----------------------------------------
-    let num_loops = 0;
-    if (num_loops > 0) {
-        eprintln!("Now lets go around {} loops to see how registers change", num_loops);
-        let mut last_cycle_seen = conc_state.cycle;
-        // record the registers
-        let mut reg_log = vec![vec![0; num_loops]; conc_state.regs.len()];
-
-        for li in 0 .. num_loops{
-            // Do a step to move away from the label
-            let instr = prog[conc_state.pc];
-            let cyc = conc_state.cycle;
-            // For some reason the cycle is off by one wrt advice
-            let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
-            conc_state.step(instr, adv);
-
-            // The run until the label is found again
-            while conc_state.pc != loop_addr {
-                let instr = prog[conc_state.pc];
-                let cyc = conc_state.cycle;
-                // For some reason the cycle is off by one wrt advice
-                let adv:Option<u64> =  advs.get(&(cyc + 1)).cloned();
-                conc_state.step(instr, adv);
-            }
-            eprintln!{"Loop diagnostic {}: Loop took {} cycles", li, conc_state.cycle - last_cycle_seen};
-            last_cycle_seen = conc_state.cycle;
-
-            for (ri, &x) in conc_state.regs.iter().enumerate() {
-                reg_log[ri][li] = x;
-            }
-        }
-
-        eprintln!("Log of registers during the loop diagnostic ");
-        for (i, &x) in conc_state.regs.iter().enumerate() {
-            eprintln!("{:2}: {:?}", i, reg_log[i]);
-        }
+    eprintln!("initial concrete state:");
+    eprintln!("  pc = {}", conc_state.pc);
+    eprintln!("  cycle = {}", conc_state.cycle);
+    for r in 0 .. NUM_REGS {
+        eprintln!("  regs[{}] = {}", r, conc_state.regs[r]);
     }
+
+    eprintln!("live_addrs size: {}", live_addrs.len());
+
+    // Record the concrete state so we don't need to rerun the concrete prefix in later stages.
+    #[cfg(feature = "recording_concrete_state")] {
+        use std::fs::{self, File};
+        let dir = advice::advice_dir();
+        fs::create_dir_all(&dir)
+            .map_err(|e| e.to_string())?;
+        let mut f = File::create(dir.join("concrete_state.cbor"))
+            .map_err(|e| e.to_string())?;
+        serde_cbor::to_writer(f, &conc_state)
+            .map_err(|e| e.to_string())?;
+    }
+
 
     // ----------------------------------------
     // Set up the proof state
@@ -209,63 +233,111 @@ fn run(path: &str) -> Result<(), String> {
     // To check each lemma, append the Z3 prologue, the SMTlib code for the lemma, and the Z3
     // epilogue.  It should report `unsat`.
 
-    println!("==== ADMIT: forall n, 2n != 1");
-    // (assert (not (not (= (bvmul (_ bv2 64) n) (_ bv1 64)))))
-    let arith_2n_ne_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
-        let n = vars.fresh();
-        // (2 * n == 1) == 0
-        let a = Term::mull(2.into(), n);
-        let eq = Term::cmpe(1.into(), a);
-        let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
-        (vec![].into(), Box::new(ne))
-    })));
-
-    println!("==== ADMIT: forall m n, m < 2^63  ->  n < m  ->  2n + 5 != 1");
-    // (assert (bvugt #x7fffffffffffffff m))
-    // (assert (bvugt m n))
-    // (assert (not (not (= (bvadd (bvmul (_ bv2 64) n) (_ bv5 64)) (_ bv1 64)))))
-    let arith_2n_plus_5_ne_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
-        let m = vars.fresh();
-        let n = vars.fresh();
-        // m < 2^63
-        let m_limit = Prop::Nonzero(Term::cmpa((1 << 63).into(), m));
-        // n < m
-        let n_limit = Prop::Nonzero(Term::cmpa(m, n));
-        // (2 * n + 5 == 1) == 0
-        let a = Term::add(Term::mull(2.into(), n), 5.into());
-        let eq = Term::cmpe(1.into(), a);
-        let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
-        (vec![m_limit, n_limit].into(), Box::new(ne))
-    })));
+    println!("==== ADMIT: forall n a, n < N_MAX  ->  1 < a  ->  a < 10  ->  2n + a != 1");
+    // (assert (bvugt (_ bv2000000000 64) n))
+    // (assert (bvugt a (_ bv1 64)))
+    // (assert (bvugt (_ bv10 64) a))
+    // (assert (not (not (= (bvadd (bvmul (_ bv2 64) n) a) (_ bv1 64)))))
+    let arith_2n_plus_k_ne_1 = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let n = vars.fresh();
+            let a = vars.fresh();
+            // n < N_MAX
+            let n_limit = Prop::Nonzero(Term::cmpa(N_MAX.into(), n));
+            // 1 < a
+            let a_min = Prop::Nonzero(Term::cmpa(a, 1.into()));
+            // a < 10
+            let a_max = Prop::Nonzero(Term::cmpa(10.into(), a));
+            // (2 * n + a == 1) == 0
+            let a = Term::add(Term::mull(2.into(), n), a);
+            let eq = Term::cmpe(1.into(), a);
+            let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
+            (vec![n_limit, a_min, a_max].into(), Box::new(ne))
+        })))
+    });
 
     println!("==== ADMIT: forall a b, 0 < a  ->  a < b  ->  a - 1 < b");
     // (assert (bvugt a (_ bv0 64)))
     // (assert (bvugt b a))
     // (assert (not (bvugt b (bvsub a (_ bv1 64)))))
-    let arith_lt_sub_1 = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
-        let a = vars.fresh();
-        let b = vars.fresh();
-        // 0 < a
-        let low = Prop::Nonzero(Term::cmpa(a, 0.into()));
-        // a < b
-        let high = Prop::Nonzero(Term::cmpa(b, a));
-        // a - 1 < b
-        let concl = Prop::Nonzero(Term::cmpa(b, Term::sub(a, 1.into())));
-        (vec![low, high].into(), Box::new(concl))
-    })));
-
+    let arith_lt_sub_1 = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let a = vars.fresh();
+            let b = vars.fresh();
+            // 0 < a
+            let low = Prop::Nonzero(Term::cmpa(a, 0.into()));
+            // a < b
+            let high = Prop::Nonzero(Term::cmpa(b, a));
+            // a - 1 < b
+            let concl = Prop::Nonzero(Term::cmpa(b, Term::sub(a, 1.into())));
+            (vec![low, high].into(), Box::new(concl))
+        })))
+    });
 
     println!("==== ADMIT: forall a b c, (a + b) + c == a + (b + c)");
     // (assert (not (= (bvadd (bvadd a b) c) (bvadd a (bvadd b c)))))
-    let arith_add_assoc = pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
-        let a = vars.fresh();
-        let b = vars.fresh();
-        let c = vars.fresh();
-        let l = Term::add(Term::add(a, b), c);
-        let r = Term::add(a, Term::add(b, c));
-        let concl = Prop::Nonzero(Term::cmpe(l, r));
-        (vec![].into(), Box::new(concl))
-    })));
+    let arith_add_assoc = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let a = vars.fresh();
+            let b = vars.fresh();
+            let c = vars.fresh();
+            let l = Term::add(Term::add(a, b), c);
+            let r = Term::add(a, Term::add(b, c));
+            let concl = Prop::Nonzero(Term::cmpe(l, r));
+            (vec![].into(), Box::new(concl))
+        })))
+    });
+
+    println!("==== ADMIT: forall n a, n < N_MAX  ->  a < 10  ->  2n + a < 2^32");
+    // (assert (bvugt (_ bv2000000000 64) n))
+    // (assert (bvugt (_ bv10 64) a))
+    // (assert (not (bvugt #x0000000100000000 (bvadd (bvmul (_ bv2 64) n) a))))
+    let arith_2n_plus_k_32bit = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let n = vars.fresh();
+            let a = vars.fresh();
+            // n < N_MAX
+            let n_limit = Prop::Nonzero(Term::cmpa(N_MAX.into(), n));
+            // a < 10
+            let a_limit = Prop::Nonzero(Term::cmpa(10.into(), a));
+            let l = Term::add(Term::mull(2.into(), n), a);
+            let concl = Prop::Nonzero(Term::cmpa((1 << 32).into(), l));
+            (vec![n_limit, a_limit].into(), Box::new(concl))
+        })))
+    });
+
+    println!("==== ADMIT: forall a, a < 2^32  ->  (a & 0xffffffff) == a");
+    // (assert (bvugt #x0000000100000000 a))
+    // (assert (not (= (bvand a #x00000000ffffffff) a)))
+    let arith_32bit_mask = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let a = vars.fresh();
+            // a < 2^32
+            let a_limit = Prop::Nonzero(Term::cmpa((1 << 32).into(), a));
+            let l = Term::and(a, 0xffff_ffff.into());
+            let r = a;
+            let concl = Prop::Nonzero(Term::cmpe(l, r));
+            (vec![a_limit].into(), Box::new(concl))
+        })))
+    });
+
+    println!("==== ADMIT: forall a, a < 2^32  ->  a != 1  ->  (a >> 31) * 0x100000000 | a != 1");
+    // (assert (bvugt #x0000000100000000 a))
+    // (assert (not (= a (_ bv1 64))))
+    // (assert (not (not (= (bvor (bvmul (bvlshr a (_ bv31 64)) #xffffffff00000000)) (_ bv1 64)))))
+    let arith_sign_extend_ne_1 = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Forall(Binder::new(|vars| {
+            let a = vars.fresh();
+            // a < 2^32
+            let a_limit = Prop::Nonzero(Term::cmpa((1 << 32).into(), a));
+            // a != 1
+            let a_ne_1 = Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), a), 0.into()));
+            let l1 = Term::mull(Term::shr(a, 31.into()), 0xffff_ffff_0000_0000.into());
+            let l = Term::or(l1, a);
+            let concl = Prop::Nonzero(Term::cmpe(Term::cmpe(l, 1.into()), 0.into()));
+            (vec![a_limit, a_ne_1].into(), Box::new(concl))
+        })))
+    });
 
 
     // ----------------------------------------
@@ -273,24 +345,32 @@ fn run(path: &str) -> Result<(), String> {
     // ----------------------------------------
 
     // `conc_state` is reachable.
-    let p_conc = pf.tactic_admit(Prop::Reachable(ReachableProp {
-        pred: Binder::new(|_vars| {
-            StatePred {
-                state: symbolic::State::new(
-                    conc_state.pc,
-                    conc_state.regs.map(|x| x.into()),
-                    MemState::Snapshot(MemSnapshot { base: 0 }),
-                    Some(conc_state.clone()),
-                ),
-                props: Box::new([]),
-            }
-        }),
-        min_cycles: conc_state.cycle.into(),
-    }));
+    let p_conc = advice::dont_record(|| {
+        pf.tactic_admit(Prop::Reachable(ReachableProp {
+            pred: Binder::new(|_vars| {
+                StatePred {
+                    state: symbolic::State::new(
+                        conc_state.pc,
+                        conc_state.regs.map(|x| x.into()),
+                        MemState::Snapshot(MemSnapshot { base: 0 }),
+                        Some(conc_state.clone()),
+                    ),
+                    props: Box::new([]),
+                }
+            }),
+            min_cycles: conc_state.cycle.into(),
+        }))
+    });
+
+
+    // ----------------------------------------
+    // START OF SECRET PROOF
+    // ----------------------------------------
+
 
     // Modify `p_conc` to match the premise of `p_loop`.
     pf.tactic_reach_extend(p_conc, |rpf| {
-        rpf.rule_mem_abs_map(&all_addrs);
+        rpf.rule_mem_abs_map(&live_addrs);
     });
 
     let init_mem_concrete = {
@@ -302,13 +382,13 @@ fn run(path: &str) -> Result<(), String> {
         }
     };
 
-    let init_mem_symbolic = |i| {
-        let mut m = init_mem_concrete.clone();
-        let i_minus_1 = Term::sub(i, 1.into());
+    let init_mem_symbolic = |_i| {
+        let m = init_mem_concrete.clone();
+        //let i_minus_1 = Term::sub(i, 1.into());
         // One address has the index
-        m.store(MemWidth::W8, Term::const_(0x7ffff468), i_minus_1, &[]).unwrap();
+        //m.store(MemWidth::W8, Term::const_(0x7ffff468), i_minus_1, &[]).unwrap();
         // One address has garbage (Really it's the index)
-        m.store(MemWidth::W8, Term::const_(0x7ffff4d0), i_minus_1, &[]).unwrap();
+        //m.store(MemWidth::W8, Term::const_(0x7ffff4d0), i_minus_1, &[]).unwrap();
         m
     };
 
@@ -319,10 +399,10 @@ fn run(path: &str) -> Result<(), String> {
                 // current pc should be the address of the loop
                 pc: conc_state.pc,
                 // We keep all concrete registers, except for the
-                // index i in register 8.
+                // index i in register 9.
                 regs: array::from_fn(|r| {
                     match r {
-                        8 => i,
+                        9 => i,
                         _ => conc_state.regs[r].into(),
                     }
                 }),
@@ -340,7 +420,7 @@ fn run(path: &str) -> Result<(), String> {
     //      reach(c, st_loop(i))
     let mk_prop_reach = |i: Term, c: Term| {
         Prop::Reachable(ReachableProp {
-            pred: Binder::new(|vars| st_loop(i.shift())),
+            pred: Binder::new(|_vars| st_loop(i.shift())),
             min_cycles: c,
         })
     };
@@ -349,13 +429,13 @@ fn run(path: &str) -> Result<(), String> {
     // Prove a double iteration (twice around the loop)
     // ----------------------------------------
 
-    let start_i = 4;
+    let start_i = NUM_CONCRETE_ITERS as u64 + 1;
 
     // We first prove a lemma of the form:
     //      forall b n,
     //          n < N_MAX ->
     //          reach(b, st_loop(2n + start_i)) ->
-    //          reach(b + 5460, st_loop(2(n+1) + start_i))
+    //          reach(b + 5426, st_loop(2(n+1) + start_i))
     eprintln!("\n# Prove p_iter");
     let p_iter = pf.tactic_forall_intro(
         |vars| {
@@ -379,88 +459,85 @@ fn run(path: &str) -> Result<(), String> {
             pf.rule_trivial();
 
             // Note: these lemmas must be adjusted when changing `start_i`.
-            let arith_2n_ne_1 = pf.tactic_clone(arith_2n_ne_1);
-            let _i_ne_1 = pf.tactic_apply(arith_2n_ne_1, &[Term::add(n, 2.into())]);
 
-            let arith_2n_plus_5_ne_1 = pf.tactic_clone(arith_2n_plus_5_ne_1);
-            let _i_plus_1_ne_1 = pf.tactic_apply(arith_2n_plus_5_ne_1, &[N_MAX.into(), n]);
+            // Note: i = 2 * n + start_i
+
+            let term_i_plus_1 = Term::add(Term::mull(n, 2.into()), (start_i + 1).into());
+            let term_i_plus_2 = Term::add(Term::mull(n, 2.into()), (start_i + 2).into());
+
+            let arith_2n_plus_k_ne_1 = pf.tactic_clone(arith_2n_plus_k_ne_1);
+            let _i_plus_1_ne_1 = pf.tactic_apply(arith_2n_plus_k_ne_1, &[n, (start_i + 1).into()]);
+            let _i_plus_2_ne_1 = pf.tactic_apply(arith_2n_plus_k_ne_1, &[n, (start_i + 2).into()]);
+
+            let arith_2n_plus_k_32bit = pf.tactic_clone(arith_2n_plus_k_32bit);
+            let _i_plus_1_32bit =
+                pf.tactic_apply(arith_2n_plus_k_32bit, &[n, (start_i + 1).into()]);
+            let _i_plus_2_32bit =
+                pf.tactic_apply(arith_2n_plus_k_32bit, &[n, (start_i + 2).into()]);
+
+            let arith_sign_extend_ne_1 = pf.tactic_clone(arith_sign_extend_ne_1);
+            let _arith_sign_extend_i_plus_1_ne_1 =
+                pf.tactic_apply(arith_sign_extend_ne_1, &[term_i_plus_1]);
+            let _arith_sign_extend_i_plus_2_ne_1 =
+                pf.tactic_apply(arith_sign_extend_ne_1, &[term_i_plus_2]);
+
+            let arith_32bit_mask = pf.tactic_clone(arith_32bit_mask);
+            let _i_plus_1_32bit_mask = pf.tactic_apply(arith_32bit_mask, &[term_i_plus_1]);
+            let _i_plus_2_32bit_mask = pf.tactic_apply(arith_32bit_mask, &[term_i_plus_2]);
+
+            let _last = _i_plus_2_32bit_mask;
 
             // Extend `p_reach` with two iterations worth of steps.
-            let (p_reach, _i_plus_1_ne_1) = pf.tactic_swap(p_reach, _i_plus_1_ne_1);
+            let (p_reach, _) = pf.tactic_swap(p_reach, _last);
             pf.tactic_reach_extend(p_reach, |rpf| {
-                let n = n.shift();
+                let term_i_plus_1 = term_i_plus_1.shift();
+                let term_i_plus_2 = term_i_plus_2.shift();
                 // rpf.show_state();
+
+                let mut stage_counter = 1;
+                let mut print_stage = move |msg: &str| {
+                    eprintln!("\t=== {}. {}", stage_counter, msg);
+                    stage_counter += 1;
+                };
 
                 // Define the proof for one single loop iteration.  The counter `n` is used to
                 // number the steps in the debug output.
-                let mut one_loop_proof = |n:&mut u32| -> () {
-                    eprintln!("\t=== {}. Concretely until the symbolic step. pc {}, cycle {:?}", n,
-                              rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
-                    rpf.tactic_run_concrete();
-                    *n += 1;
+                let mut one_loop_proof = |term_i_plus_k: Term| -> () {
+                    //rpf.show_state();
 
-                    eprintln!("\t=== {}. Symbolic comparison symbolic step. pc {}, cycle {:?}", n,
-                              rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
+                    print_stage("Mask `i` and rewrite symbolic expr");
+                    rpf.rule_step();
                     rpf.rule_step();
                     //rpf.show_state();
-                    *n += 1;
-
-                    eprintln!("\t=== {}. Replace the symbolic comparison with concrete value.
-                               (i==1) -> 0. pc {}, cycle {:?}", n,
-                              rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
-                    rpf.show_context();
-                    rpf.rule_rewrite_reg(32, Term::const_(0));
-                    *n += 1;
-
-                    eprintln!("\t=== {}. Concretely until the symb. store. pc {}, cycle {:?}", n,
-                              rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
-                    rpf.tactic_run_concrete();
-                    *n += 1;
-
-                    eprintln!("\t=== {}. Symbolic store the i, with the rule_step", n);
-                    rpf.rule_step();
-                    // rpf.show_state();
-                    *n += 1;
-
-                    eprintln!("\t=== {}. Concretely (long) until the increment of i. pc {}, cycle {:?}", n,
-                              rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
-                    rpf.tactic_run_concrete();
+                    rpf.rule_rewrite_reg(10, term_i_plus_k);
                     //rpf.show_state();
-                    *n += 1;
 
-                    eprintln!("\t=== {}. Symbolic: increment the counter", n);
-                    rpf.rule_step();
+                    print_stage("Loop condition check (exit not taken)");
+                    rpf.tactic_run();
+                    //rpf.show_context();
                     //rpf.show_state();
-                    *n += 1;
-
-
-                    eprintln!("\t=== {}. Concrete until the symbolic substraction. pc {}, cycle {:?}", n,
-                              rpf.state().pc, rpf.state().conc_st.clone().map(|cst| cst.cycle));
-                    rpf.tactic_run_concrete();
+                    rpf.rule_rewrite_reg(32, 0.into());
                     //rpf.show_state();
-                    *n += 1;
 
-                    // Why is i first substracted and then stored?
-                    eprintln!("\t=== {}. Symbolic substraction and store `sp <- (i-1)`, with the rule_step", n);
-                    rpf.rule_step(); // 253801. %11 = %8 + -1
-                    rpf.rule_step(); //253802. %32 = %ax + 88
-                    rpf.rule_step(); // 253803.        *(%32) = %11
-                    // rpf.show_state();
-                    *n += 1;
-
-
-                    eprintln!("\t=== {}. Run until Beggining, wash and repeat", n);
+                    print_stage("Run until top of loop");
                     rpf.tactic_run_until(loop_addr);
-                    // rpf.show_state();
-                    *n += 1;
+                    //rpf.show_state();
+
+                    let pc = rpf.state().pc;
+                    if pc != loop_addr {
+                        let instr = prog[pc];
+                        panic!("got stuck at pc = {}, instr = {:?}", pc, instr);
+                    }
                 };
 
                 // Apply the proof to two loops.
-                let mut steps_counter = 1;
                 println!("=== Prove the first loop");
-                one_loop_proof(&mut steps_counter);
+                one_loop_proof(term_i_plus_1);
                 println!("=== Prove the second loop");
-                one_loop_proof(&mut steps_counter);
+                one_loop_proof(term_i_plus_2);
+
+                // Shrink memory so that the conclusion matches the premise.
+                rpf.rule_mem_abs_map(&live_addrs);
             });
         },
     );
@@ -477,7 +554,7 @@ fn run(path: &str) -> Result<(), String> {
     //          n < N_MAX ->
     //          forall b,
     //              reach(b, st_loop(start_i)) ->
-    //              reach(b + n * 5460, st_loop(2n + start_i))
+    //              reach(b + n * 5426, st_loop(2n + start_i))
     //
     // We separate the binders for `b` and `n` because `tactic_induction` expects to see only a
     // single bound variable (`n`) in `Hsucc`.
@@ -496,9 +573,9 @@ fn run(path: &str) -> Result<(), String> {
                 let b = vars.fresh();
                 // reach(b, st_loop(start_i)) ->
                 let p = mk_prop_reach(start_i.into(), b);
-                // reach(b + n * 5460, st_loop(2n + start_i))
+                // reach(b + n * 5426, st_loop(2n + start_i))
                 let i = Term::add(Term::mull(2.into(), n), start_i.into());
-                let cyc = Term::add(b, Term::mull(n, 5460.into()));
+                let cyc = Term::add(b, Term::mull(n, 5426.into()));
                 let q = mk_prop_reach(i, cyc);
                 (vec![p].into(), Box::new(q))
             }));
@@ -549,15 +626,15 @@ fn run(path: &str) -> Result<(), String> {
 
                     // Use `p_iter` to show that iteration `n+1` is reachable.
                     let p_iter = pf.tactic_clone(p_iter);
-                    let cyc_n = Term::add(b, Term::mull(n, 5460.into()));
+                    let cyc_n = Term::add(b, Term::mull(n, 5426.into()));
                     let p_final = pf.tactic_apply(p_iter, &[cyc_n, n]);
 
                     // Rewrite the cycle count using associativity.
                     let arith_add_assoc = pf.tactic_clone(arith_add_assoc);
                     let cyc_eq = pf.tactic_apply(arith_add_assoc,
-                        &[b, Term::mull(n, 5460.into()), 5460.into()]);
+                        &[b, Term::mull(n, 5426.into()), 5426.into()]);
                     let cyc_n_plus_1 =
-                        Term::add(b, Term::add(Term::mull(n, 5460.into()), 5460.into()));
+                        Term::add(b, Term::add(Term::mull(n, 5426.into()), 5426.into()));
                     pf.tactic_reach_shrink(p_final, cyc_n_plus_1);
 
                     // Move `p_final` to the end, so it becomes the conclusion of the forall.
@@ -589,6 +666,13 @@ fn run(path: &str) -> Result<(), String> {
     println!("Final theorem:\n{}", pf.print(&pf.props()[p_exec.1]));
     println!("============\n");
     println!("Ok: Proof verified");
+
+    #[cfg(feature = "recording_rules")] {
+        use sym_proof::advice::RecordingStreamTag;
+        use sym_proof::interp::Rule;
+        advice::recording::rules::Tag.record(&Rule::Done);
+    }
+    advice::finish()?;
 
     Ok(())
 }

@@ -1,14 +1,15 @@
-use std::array;
-use std::convert::{TryFrom, TryInto};
-use std::collections::HashSet;
-use std::fs::{self, File};
-use std::io::{Read, Write};
-use std::mem;
-use std::panic::{self, UnwindSafe};
-use std::path::Path;
-use serde_cbor;
+use core::any;
+use core::array;
+use core::cell::Cell;
+use core::convert::{TryFrom, TryInto};
+use core::mem::{self, MaybeUninit};
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+#[cfg(not(feature = "microram_api"))] use std::io::{Read, Write};
+#[cfg(not(feature = "microram_api"))] use std::panic::{self, UnwindSafe};
+use log::trace;
 use crate::{Word, BinOp};
-use crate::logic::{Term, TermKind, VarId, VarCounter, Binder, Prop, ReachableProp, StatePred};
+use crate::logic::{Term, VarId, VarCounter, Binder, Prop, ReachableProp, StatePred};
 use crate::micro_ram::MemWidth;
 use crate::symbolic::{self, MemState, MemConcrete, MemMap, MemSnapshot, MemLog, MemMulti};
 
@@ -20,22 +21,74 @@ pub mod vec;
 
 pub type Value = u64;
 
+#[cfg(feature = "microram_api")]
+extern "C" {
+    fn __cc_advise(max: Value) -> Value;
+}
+
+
+#[allow(dead_code)]
+struct FakeThreadLocal<T>(pub T);
+
+unsafe impl<T> Sync for FakeThreadLocal<T> {}
+
+impl<T> FakeThreadLocal<T> {
+    #[allow(dead_code)]
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        f(&self.0)
+    }
+}
+
+
+#[cfg(not(feature = "microram_api"))]
+use std::thread_local;
+
+#[cfg(feature = "microram_api")]
+macro_rules! thread_local {
+    (
+        static $NAME:ident: $Ty:ty = $init:expr;
+    ) => {
+        static $NAME: $crate::advice::FakeThreadLocal<$Ty> =
+            $crate::advice::FakeThreadLocal($init);
+    };
+}
+
+
+thread_local! {
+    static RECORDING_ENABLED: Cell<bool> = Cell::new(true);
+}
+
+/// Temporarily disable recording for the duration of the closure.
+pub fn dont_record<R>(f: impl FnOnce() -> R) -> R {
+    let old = RECORDING_ENABLED.with(|c| c.replace(false));
+    let r = f();
+    RECORDING_ENABLED.with(|c| c.set(old));
+    r
+}
+
+pub fn is_recording() -> bool {
+    RECORDING_ENABLED.with(|c| c.get())
+}
+
 
 pub struct RecordingStream {
     buf: Vec<Value>,
 }
 
 impl RecordingStream {
-    pub fn new() -> RecordingStream {
+    pub const fn new() -> RecordingStream {
         RecordingStream {
             buf: Vec::new(),
         }
     }
 
     pub fn put(&mut self, v: Value) {
-        self.buf.push(v);
+        if is_recording() {
+            self.buf.push(v);
+        }
     }
 
+    #[cfg(not(feature = "microram_api"))]
     pub fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         serde_cbor::to_writer(w, &self.buf)
     }
@@ -53,13 +106,17 @@ pub trait RecordingStreamTag: Sized + Copy {
     fn with<R>(self, f: impl FnOnce(&mut RecordingStream) -> R) -> R;
 
     fn put(self, v: Value) {
-        self.with(|rs| rs.put(v))
+        self.with(|rs| {
+            trace!("{}: put {} at index {}", any::type_name::<Self>(), v, rs.buf.len());
+            rs.put(v);
+        })
     }
 
     fn put_cast<T: TryInto<Value>>(self, v: T) {
         self.put(v.try_into().ok().unwrap());
     }
 
+    #[cfg(not(feature = "microram_api"))]
     fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         self.with(|rs| mem::replace(rs, RecordingStream::new()).finish(w))
     }
@@ -72,7 +129,8 @@ pub trait RecordingStreamTag: Sized + Copy {
 macro_rules! recording_stream {
     ($name:ident) => {
         pub mod $name {
-            use std::cell::RefCell;
+            use core::cell::RefCell;
+            #[cfg(not(feature = "microram_api"))] use std::thread_local;
             use crate::advice::{RecordingStream, RecordingStreamTag};
 
             thread_local! {
@@ -111,21 +169,28 @@ macro_rules! recording_stream {
 /// contains `[2]`.
 pub struct ChunkedRecordingStream {
     chunks: Vec<RecordingStream>,
+    /// IDs of chunks that will not be included in the output.  When `add_chunk` is called while
+    /// `!is_recording()`, a chunk is created, but the chunk is also added to this set.
+    omit_chunks: Vec<ChunkId>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct ChunkId(usize);
 
 impl ChunkedRecordingStream {
-    pub fn new() -> ChunkedRecordingStream {
+    pub const fn new() -> ChunkedRecordingStream {
         ChunkedRecordingStream {
             chunks: Vec::new(),
+            omit_chunks: Vec::new(),
         }
     }
 
     pub fn add_chunk(&mut self) -> ChunkId {
         let id = ChunkId(self.chunks.len());
         self.chunks.push(RecordingStream::new());
+        if !is_recording() {
+            self.omit_chunks.push(id);
+        }
         id
     }
 
@@ -137,9 +202,13 @@ impl ChunkedRecordingStream {
         &mut self.chunks[id.0]
     }
 
+    #[cfg(not(feature = "microram_api"))]
     pub fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
-        let buf = self.chunks.into_iter()
-            .flat_map(|rs| rs.buf.into_iter())
+        use std::collections::HashSet;
+        let omit = self.omit_chunks.into_iter().collect::<HashSet<_>>();
+        let buf = self.chunks.into_iter().enumerate()
+            .filter(|&(i, _)| !omit.contains(&ChunkId(i)))
+            .flat_map(|(_, rs)| rs.buf.into_iter())
             .collect::<Vec<_>>();
         serde_cbor::to_writer(w, &buf)
     }
@@ -168,6 +237,7 @@ pub trait ChunkedRecordingStreamTag: Sized + Copy {
         self.mk_chunk_tag(id)
     }
 
+    #[cfg(not(feature = "microram_api"))]
     fn finish(self, w: impl Write) -> serde_cbor::Result<()> {
         self.with(|crs| mem::replace(crs, ChunkedRecordingStream::new()).finish(w))
     }
@@ -177,7 +247,8 @@ pub trait ChunkedRecordingStreamTag: Sized + Copy {
 macro_rules! chunked_recording_stream {
     ($name:ident) => {
         pub mod $name {
-            use std::cell::RefCell;
+            use core::cell::RefCell;
+            #[cfg(not(feature = "microram_api"))] use std::thread_local;
             use crate::advice::{
                 RecordingStream, RecordingStreamTag,
                 ChunkedRecordingStream, ChunkedRecordingStreamTag, ChunkId,
@@ -223,7 +294,7 @@ pub struct PlaybackStream {
 }
 
 impl PlaybackStream {
-    pub fn new() -> PlaybackStream {
+    pub const fn new() -> PlaybackStream {
         PlaybackStream {
             buf: Vec::new(),
             pos: 0,
@@ -231,6 +302,7 @@ impl PlaybackStream {
         }
     }
 
+    #[cfg(not(feature = "microram_api"))]
     pub fn load(&mut self, r: impl Read) -> serde_cbor::Result<()> {
         assert!(!self.inited, "stream has already been initialized");
         let buf = serde_cbor::from_reader(r)?;
@@ -240,6 +312,7 @@ impl PlaybackStream {
         Ok(())
     }
 
+    #[cfg(not(feature = "microram_api"))]
     pub fn take(&mut self) -> Value {
         assert!(self.inited, "tried to read from uninitialized stream");
         assert!(self.pos < self.buf.len(), "tried to read past end of stream (at {})", self.pos);
@@ -251,26 +324,46 @@ impl PlaybackStream {
         v
     }
 
+    #[cfg(not(feature = "microram_api"))]
     pub fn take_bounded(&mut self, max: Value) -> Value {
         let v = self.take();
         assert!(v <= max);
         v
+    }
+
+    #[cfg(feature = "microram_api")]
+    pub fn take(&mut self) -> Value {
+        self.take_bounded(Value::MAX)
+    }
+
+    #[cfg(feature = "microram_api")]
+    pub fn take_bounded(&mut self, max: Value) -> Value {
+        unsafe { __cc_advise(max) }
     }
 }
 
 pub trait PlaybackStreamTag: Sized + Copy {
     fn with<R>(self, f: impl FnOnce(&mut PlaybackStream) -> R) -> R;
 
+    #[cfg(not(feature = "microram_api"))]
     fn load(self, r: impl Read) -> serde_cbor::Result<()> {
         self.with(|ps| ps.load(r))
     }
 
     fn take(self) -> Value {
-        self.with(|ps| ps.take())
+        self.with(|ps| {
+            let v = ps.take();
+            trace!("{}: take {} from index {}", any::type_name::<Self>(), v, ps.pos - 1);
+            v
+        })
     }
 
     fn take_bounded(self, max: Value) -> Value {
-        self.with(|ps| ps.take_bounded(max))
+        self.with(|ps| {
+            let v = ps.take_bounded(max);
+            trace!("{}: take {} from index {}", any::type_name::<Self>(), v, ps.pos - 1);
+            v
+        })
     }
 
     fn take_cast<T: TryFrom<Value>>(self) -> T {
@@ -306,7 +399,8 @@ pub trait PlaybackStreamTag: Sized + Copy {
 macro_rules! playback_stream_inner {
     ($name:ident) => {
         pub mod $name {
-            use std::cell::RefCell;
+            use core::cell::RefCell;
+            #[cfg(not(feature = "microram_api"))] use std::thread_local;
             use crate::advice::{PlaybackStream, PlaybackStreamTag};
 
             thread_local! {
@@ -325,14 +419,6 @@ macro_rules! playback_stream_inner {
     };
 }
 
-macro_rules! playback_stream_alias_for_linear {
-    ($name:ident) => {
-        pub mod $name {
-            pub use super::linear::Tag;
-        }
-    };
-}
-
 #[cfg(not(feature = "playback_linear"))]
 macro_rules! playback_stream {
     ($name:ident) => { playback_stream_inner!($name); };
@@ -342,15 +428,19 @@ macro_rules! playback_stream {
 #[cfg(feature = "playback_linear")]
 macro_rules! playback_stream {
     (linear) => { playback_stream_inner!(linear); };
-    ($name:ident) => { playback_stream_alias_for_linear!($name); };
+    ($name:ident) => {
+        pub mod $name {
+            pub use super::linear::Tag;
+        }
+    };
 }
 
 
-pub trait Record: std::fmt::Debug {
+pub trait Record: core::fmt::Debug {
     fn record_into(&self, rs: impl RecordingStreamTag);
 }
 
-pub trait Playback: std::fmt::Debug {
+pub trait Playback: core::fmt::Debug {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self;
 }
 
@@ -365,7 +455,7 @@ macro_rules! impl_record_playback_for_primitive {
 
         impl Playback for $T {
             fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-                if let Ok(max) = Value::try_from(<$T>::MAX) {
+                if Value::try_from(<$T>::MAX).is_ok() {
                     ps.take_bounded_cast(<$T>::MAX)
                 } else {
                     ps.take_cast()
@@ -485,7 +575,14 @@ impl<T: Record, const N: usize> Record for [T; N] {
 
 impl<T: Playback, const N: usize> Playback for [T; N] {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        array::from_fn(|_| ps.playback())
+        unsafe {
+            let mut arr = MaybeUninit::<[T; N]>::uninit();
+            let ptr = arr.as_mut_ptr() as *mut T;
+            for i in 0 .. N {
+                ptr.add(i).write(ps.playback());
+            }
+            arr.assume_init()
+        }
     }
 }
 
@@ -608,6 +705,7 @@ impl Playback for MemWidth {
 impl Record for Term {
     fn record_into(&self, _rs: impl RecordingStreamTag) {
         #[cfg(feature = "recording_terms")] {
+            use crate::logic::term::TermKind;
             let rs = recording::terms::Tag;
             match self.kind() {
                 TermKind::Const(x) => {
@@ -639,47 +737,71 @@ impl Record for Term {
         }
 
         #[cfg(feature = "recording_term_index")] {
-            let rs = recording::term_index::Tag;
-            let index = term_table::recording::term_index(*self);
-            rs.put_cast(index);
-            return;
+            // The intended workflow is to run with `recording_terms`, then later run again with
+            // `playback_terms` and `recording_term_index` to convert explicit terms to term
+            // indices.
+            panic!("recording directly into `term_index` is not supported");
         }
-
-        panic!("no term recording mode is enabled");
     }
+}
+
+thread_local! {
+    static PLAYBACK_TERM_IS_TOP_LEVEL: Cell<bool> = Cell::new(true);
+}
+
+/// Enter playback of a term.  The callback argument is `true` if the term being played back is at
+/// top level, or `false` if we were already in the process of playing back a term.
+#[cfg(feature = "playback_terms")]
+fn playback_enter_term<R>(f: impl FnOnce(bool) -> R) -> R {
+    let is_top_level = PLAYBACK_TERM_IS_TOP_LEVEL.with(|c| c.replace(false));
+    let r = f(is_top_level);
+    PLAYBACK_TERM_IS_TOP_LEVEL.with(|c| c.set(is_top_level));
+    r
 }
 
 impl Playback for Term {
     fn playback_from(_ps: impl PlaybackStreamTag) -> Self {
         #[cfg(feature = "playback_terms")] {
-            let ps = playback::terms::Tag;
-            return match ps.take_bounded(4) {
-                0 => {
-                    let x = ps.playback::<Word>();
-                    Term::const_(x)
-                },
-                1 => {
-                    let v = ps.playback::<VarId>();
-                    Term::var_unchecked(v)
-                },
-                2 => {
-                    let a = ps.playback::<Term>();
-                    Term::not(a)
-                },
-                3 => {
-                    let op = ps.playback::<BinOp>();
-                    let a = ps.playback::<Term>();
-                    let b = ps.playback::<Term>();
-                    Term::binary(op, a, b)
-                },
-                4 => {
-                    let a = ps.playback::<Term>();
-                    let b = ps.playback::<Term>();
-                    let c = ps.playback::<Term>();
-                    Term::mux(a, b, c)
-                },
-                _ => unreachable!(),
-            };
+            return playback_enter_term(|is_top_level| {
+                let ps = playback::terms::Tag;
+                let t = match ps.take_bounded(4) {
+                    0 => {
+                        let x = ps.playback::<Word>();
+                        Term::const_(x)
+                    },
+                    1 => {
+                        let v = ps.playback::<VarId>();
+                        Term::var_unchecked(v)
+                    },
+                    2 => {
+                        let a = ps.playback::<Term>();
+                        Term::not(a)
+                    },
+                    3 => {
+                        let op = ps.playback::<BinOp>();
+                        let a = ps.playback::<Term>();
+                        let b = ps.playback::<Term>();
+                        Term::binary(op, a, b)
+                    },
+                    4 => {
+                        let a = ps.playback::<Term>();
+                        let b = ps.playback::<Term>();
+                        let c = ps.playback::<Term>();
+                        Term::mux(a, b, c)
+                    },
+                    _ => unreachable!(),
+                };
+
+                #[cfg(feature = "recording_term_index")] {
+                    if is_top_level {
+                        let rs = recording::term_index::Tag;
+                        let index = term_table::recording::term_index(t);
+                        rs.put_cast(index);
+                    }
+                }
+
+                t
+            });
         }
 
         #[cfg(feature = "playback_term_index")] {
@@ -689,7 +811,9 @@ impl Playback for Term {
             return Term::from_table_index(index);
         }
 
-        panic!("no term playback mode is enabled");
+        #[cfg(not(any(feature = "playback_terms", feature = "playback_term_index")))] {
+            panic!("no term playback mode is enabled");
+        }
     }
 }
 
@@ -854,29 +978,29 @@ impl Playback for MemConcrete {
 
 impl Record for MemMap {
     fn record_into(&self, rs: impl RecordingStreamTag) {
-        let _ = rs;
-        todo!()
+        let MemMap { ref m } = *self;
+        rs.record(m);
     }
 }
 
 impl Playback for MemMap {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        let _ = ps;
-        todo!()
+        let m = ps.playback();
+        MemMap { m }
     }
 }
 
 impl Record for MemSnapshot {
     fn record_into(&self, rs: impl RecordingStreamTag) {
-        let _ = rs;
-        todo!()
+        let MemSnapshot { base } = *self;
+        rs.record(&base);
     }
 }
 
 impl Playback for MemSnapshot {
     fn playback_from(ps: impl PlaybackStreamTag) -> Self {
-        let _ = ps;
-        todo!()
+        let base = ps.playback();
+        MemSnapshot { base }
     }
 }
 
@@ -938,146 +1062,181 @@ pub mod playback {
 }
 
 
-fn load_file(path: impl AsRef<Path>, ps: impl PlaybackStreamTag) -> Result<(), String> {
-    let path = path.as_ref();
-    let f = File::open(path).map_err(|x| x.to_string())?;
-    ps.load(f).map_err(|x| x.to_string())?;
-    eprintln!("loaded advice: {path:?}");
-    Ok(())
+#[cfg(not(feature = "microram"))]
+pub fn advice_dir() -> std::path::PathBuf {
+    std::env::var_os("SYM_PROOF_ADVICE_DIR").map_or_else(
+        || "advice".into(),
+        |v| v.into(),
+    )
 }
 
-fn load_term_table_from_file(path: impl AsRef<Path>) -> Result<(), String> {
-    let path = path.as_ref();
-    let f = File::open(path).map_err(|x| x.to_string())?;
-    term_table::playback::load(f).map_err(|x| x.to_string())?;
-    eprintln!("loaded advice: {path:?}");
-    Ok(())
-}
-
-#[cfg(not(feature = "playback_linear"))]
-pub fn load() -> Result<(), String> {
-    #[cfg(feature = "playback_rules")] {
-        load_file("advice/rules.cbor", playback::rules::Tag)?;
-        load_file("advice/props.cbor", playback::props::Tag)?;
-        load_file("advice/states.cbor", playback::states::Tag)?;
-    }
-    #[cfg(feature = "playback_terms")] {
-        load_file("advice/terms.cbor", playback::terms::Tag)?;
-    }
-    #[cfg(feature = "playback_term_table")] {
-        load_term_table_from_file("advice/term_table.cbor")?;
-    }
-    #[cfg(feature = "playback_term_index")] {
-        load_file("advice/term_index.cbor", playback::term_index::Tag)?;
-    }
-    #[cfg(feature = "playback_term_intern_index")] {
-        load_file("advice/term_intern_index.cbor", playback::term_intern_index::Tag)?;
-    }
-    #[cfg(feature = "playback_search_index")] {
-        load_file("advice/search_index.cbor", playback::search_index::Tag)?;
-    }
-    #[cfg(feature = "playback_avec_len")] {
-        load_file("advice/avec_len.cbor", playback::avec_len::Tag)?;
-    }
-    #[cfg(feature = "playback_amap_keys")] {
-        load_file("advice/amap_keys.cbor", playback::amap_keys::Tag)?;
-    }
-    #[cfg(feature = "playback_amap_access")] {
-        load_file("advice/amap_access.cbor", playback::amap_access::Tag)?;
-    }
-
-    Ok(())
-}
-
-#[cfg(feature = "playback_linear")]
-pub fn load() -> Result<(), String> {
-    load_file("advice/linear.cbor", playback::linear::Tag)?;
-    #[cfg(feature = "playback_term_table")] {
-        load_term_table_from_file("advice/term_table.cbor")?;
-    }
-    Ok(())
-}
+#[cfg(not(feature = "microram_api"))]
+mod load_finish {
+    // Helper functions in this module are used only when certain features are enabled.
+    #![allow(dead_code)]
+    #![allow(unused_imports)]
+    use alloc::borrow::ToOwned;
+    use alloc::string::{String, ToString};
+    use std::env;
+    use std::eprintln;
+    use std::fs::{self, File};
+    use std::path::{Path, PathBuf};
+    use super::{
+        recording, playback, term_table, advice_dir, PlaybackStreamTag, RecordingStreamTag,
+        ChunkedRecordingStreamTag,
+    };
 
 
-fn finish_file(path: impl AsRef<Path>, rs: impl RecordingStreamTag) -> Result<(), String> {
-    let path = path.as_ref();
-    let f = File::create(path).map_err(|x| x.to_string())?;
-    rs.finish(f).map_err(|x| x.to_string())?;
-    eprintln!("saved advice: {path:?}");
-    Ok(())
-}
-
-fn finish_file_chunked(
-    path: impl AsRef<Path>,
-    crs: impl ChunkedRecordingStreamTag,
-) -> Result<(), String> {
-    let path = path.as_ref();
-    let f = File::create(path).map_err(|x| x.to_string())?;
-    crs.finish(f).map_err(|x| x.to_string())?;
-    eprintln!("saved advice: {path:?}");
-    Ok(())
-}
-
-pub fn finish() -> Result<(), String> {
-    fs::create_dir_all("advice").map_err(|x| x.to_string())?;
-
-    #[cfg(feature = "recording_rules")] {
-        finish_file("advice/rules.cbor", recording::rules::Tag)?;
-        finish_file("advice/props.cbor", recording::props::Tag)?;
-        finish_file("advice/states.cbor", recording::states::Tag)?;
-    }
-    #[cfg(feature = "recording_terms")] {
-        finish_file("advice/terms.cbor", recording::terms::Tag)?;
-    }
-    #[cfg(feature = "recording_term_table")] {
-        let path = "advice/term_table.cbor";
-        let f = File::create(path).map_err(|x| x.to_string())?;
-        term_table::recording::finish(f).map_err(|x| x.to_string())?;
-        eprintln!("saved advice: {path:?}");
-    }
-    #[cfg(feature = "recording_term_index")] {
-        finish_file("advice/term_index.cbor", recording::term_index::Tag)?;
-    }
-    #[cfg(feature = "recording_term_intern_index")] {
-        finish_file("advice/term_intern_index.cbor", recording::term_intern_index::Tag)?;
-    }
-    #[cfg(feature = "recording_search_index")] {
-        finish_file("advice/search_index.cbor", recording::search_index::Tag)?;
-    }
-    #[cfg(feature = "recording_avec_len")] {
-        finish_file_chunked("advice/avec_len.cbor", recording::avec_len::Tag)?;
-    }
-    #[cfg(feature = "recording_amap_keys")] {
-        finish_file_chunked("advice/amap_keys.cbor", recording::amap_keys::Tag)?;
-    }
-    #[cfg(feature = "recording_amap_access")] {
-        finish_file("advice/amap_access.cbor", recording::amap_access::Tag)?;
-    }
-    #[cfg(feature = "recording_linear")] {
-        finish_file("advice/linear.cbor", recording::linear::Tag)?;
+    fn load_file(name: impl AsRef<Path>, ps: impl PlaybackStreamTag) -> Result<(), String> {
+        let path = advice_dir().join(name);
+        let f = File::open(&path).map_err(|x| x.to_string())?;
+        ps.load(f).map_err(|x| x.to_string())?;
+        eprintln!("loaded advice: {path:?}");
+        Ok(())
     }
 
-    Ok(())
-}
+    fn load_term_table_from_file(name: impl AsRef<Path>) -> Result<(), String> {
+        let path = advice_dir().join(name);
+        let f = File::open(&path).map_err(|x| x.to_string())?;
+        term_table::playback::load(f).map_err(|x| x.to_string())?;
+        eprintln!("loaded advice: {path:?}");
+        Ok(())
+    }
 
-
-macro_rules! rollback_on_panic_body {
-    ($f:expr; $($stream:ident),*) => {{
-        $( let $stream = recording::$stream::Tag.with(|rs| rs.snapshot()); )*
-        let r = panic::catch_unwind($f);
-        match r {
-            Ok(x) => x,
-            Err(e) => {
-                $( recording::$stream::Tag.with(|rs| rs.rewind($stream)); )*
-                panic::resume_unwind(e);
-            },
+    #[cfg(not(feature = "playback_linear"))]
+    pub fn load() -> Result<(), String> {
+        #[cfg(feature = "playback_rules")] {
+            load_file("rules.cbor", playback::rules::Tag)?;
+            load_file("props.cbor", playback::props::Tag)?;
+            load_file("states.cbor", playback::states::Tag)?;
         }
-    }};
+        #[cfg(feature = "playback_terms")] {
+            load_file("terms.cbor", playback::terms::Tag)?;
+        }
+        #[cfg(feature = "playback_term_table")] {
+            load_term_table_from_file("term_table.cbor")?;
+        }
+        #[cfg(feature = "playback_term_index")] {
+            load_file("term_index.cbor", playback::term_index::Tag)?;
+        }
+        #[cfg(feature = "playback_term_intern_index")] {
+            load_file("term_intern_index.cbor", playback::term_intern_index::Tag)?;
+        }
+        #[cfg(feature = "playback_search_index")] {
+            load_file("search_index.cbor", playback::search_index::Tag)?;
+        }
+        #[cfg(feature = "playback_avec_len")] {
+            load_file("avec_len.cbor", playback::avec_len::Tag)?;
+        }
+        #[cfg(feature = "playback_amap_keys")] {
+            load_file("amap_keys.cbor", playback::amap_keys::Tag)?;
+        }
+        #[cfg(feature = "playback_amap_access")] {
+            load_file("amap_access.cbor", playback::amap_access::Tag)?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "playback_linear")]
+    pub fn load() -> Result<(), String> {
+        load_file("linear.cbor", playback::linear::Tag)?;
+        #[cfg(feature = "playback_term_table")] {
+            load_term_table_from_file("term_table.cbor")?;
+        }
+        Ok(())
+    }
+
+
+    fn finish_file(name: impl AsRef<Path>, rs: impl RecordingStreamTag) -> Result<(), String> {
+        let dir = advice_dir();
+        fs::create_dir_all(&dir).map_err(|x| x.to_string())?;
+        let path = dir.join(name);
+        let f = File::create(&path).map_err(|x| x.to_string())?;
+        rs.finish(f).map_err(|x| x.to_string())?;
+        eprintln!("saved advice: {path:?}");
+        Ok(())
+    }
+
+    fn finish_file_chunked(
+        name: impl AsRef<Path>,
+        crs: impl ChunkedRecordingStreamTag,
+    ) -> Result<(), String> {
+        let dir = advice_dir();
+        fs::create_dir_all(&dir).map_err(|x| x.to_string())?;
+        let path = dir.join(name);
+        let f = File::create(&path).map_err(|x| x.to_string())?;
+        crs.finish(f).map_err(|x| x.to_string())?;
+        eprintln!("saved advice: {path:?}");
+        Ok(())
+    }
+
+    pub fn finish() -> Result<(), String> {
+        #[cfg(feature = "recording_rules")] {
+            finish_file("rules.cbor", recording::rules::Tag)?;
+            finish_file("props.cbor", recording::props::Tag)?;
+            finish_file("states.cbor", recording::states::Tag)?;
+        }
+        #[cfg(feature = "recording_terms")] {
+            finish_file("terms.cbor", recording::terms::Tag)?;
+        }
+        #[cfg(feature = "recording_term_table")] {
+            let name = "term_table.cbor";
+            let dir = advice_dir();
+            fs::create_dir_all(&dir).map_err(|x| x.to_string())?;
+            let path = dir.join(name);
+            let f = File::create(&path).map_err(|x| x.to_string())?;
+            term_table::recording::finish(f).map_err(|x| x.to_string())?;
+            eprintln!("saved advice: {path:?}");
+        }
+        #[cfg(feature = "recording_term_index")] {
+            finish_file("term_index.cbor", recording::term_index::Tag)?;
+        }
+        #[cfg(feature = "recording_term_intern_index")] {
+            finish_file("term_intern_index.cbor", recording::term_intern_index::Tag)?;
+        }
+        #[cfg(feature = "recording_search_index")] {
+            finish_file("search_index.cbor", recording::search_index::Tag)?;
+        }
+        #[cfg(feature = "recording_avec_len")] {
+            finish_file_chunked("avec_len.cbor", recording::avec_len::Tag)?;
+        }
+        #[cfg(feature = "recording_amap_keys")] {
+            finish_file_chunked("amap_keys.cbor", recording::amap_keys::Tag)?;
+        }
+        #[cfg(feature = "recording_amap_access")] {
+            finish_file("amap_access.cbor", recording::amap_access::Tag)?;
+        }
+        #[cfg(feature = "recording_linear")] {
+            finish_file("linear.cbor", recording::linear::Tag)?;
+        }
+
+        Ok(())
+    }
 }
 
+#[cfg(not(feature = "microram_api"))] pub use self::load_finish::{load, finish};
+
+
+#[cfg(not(feature = "microram_api"))]
 pub fn rollback_on_panic<F: FnOnce() -> R + UnwindSafe, R>(f: F) -> R {
+    macro_rules! rollback_on_panic_body {
+        ($f:expr; $($stream:ident),*) => {{
+            $( let $stream = recording::$stream::Tag.with(|rs| rs.snapshot()); )*
+            let r = panic::catch_unwind($f);
+            match r {
+                Ok(x) => x,
+                Err(e) => {
+                    $( recording::$stream::Tag.with(|rs| rs.rewind($stream)); )*
+                    panic::resume_unwind(e);
+                },
+            }
+        }};
+    }
+
     rollback_on_panic_body!(
         f;
-        rules, props, states, terms, term_index, term_intern_index, search_index
+        rules, props, states, terms, term_index, term_intern_index, search_index, avec_len,
+        amap_keys, amap_access, linear
     )
 }

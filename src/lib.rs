@@ -1,7 +1,13 @@
 // The proof implementation returns `Err` when a rule fails to apply.  A bad proof will be caught
 // eventually, but checking all `Result`s lets us catch problems sooner.
 #![deny(unused_must_use)]
-use std::mem;
+#![cfg_attr(feature = "deny_warnings", deny(warnings))]
+#![no_std]
+
+extern crate alloc;
+#[cfg(any(not(feature = "microram_api"), feature = "verbose"))] extern crate std;
+
+use core::mem;
 
 #[macro_use] mod macros;
 
@@ -12,6 +18,7 @@ pub mod interp;
 pub mod kernel;
 pub mod logic;
 pub mod symbolic;
+#[cfg(not(feature = "microram_api"))]
 pub mod tactics;
 
 

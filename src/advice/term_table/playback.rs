@@ -1,11 +1,11 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::convert::TryInto;
-use std::io::Read;
-use std::mem;
+use core::cell::RefCell;
+use alloc::boxed::Box;
+#[cfg(not(feature = "playback_term_intern_index"))] use std::collections::HashMap;
+#[cfg(not(feature = "microram_api"))] use std::io::Read;
+#[cfg(not(feature = "microram_api"))] use std::thread_local;
+use core::mem;
 use serde_cbor;
-use crate::BinOp;
-use crate::logic::{Term, TermKind, VarId};
+use crate::logic::TermKind;
 use super::RawTermKind;
 
 thread_local! {
@@ -49,7 +49,7 @@ pub fn get_index(index: usize) -> &'static RawTermKind {
 pub fn kind_to_index(kind: TermKind) -> usize {
     TABLE.with(|table| {
         let table = table.borrow();
-        let raw = RawTermKind::from_term_kind(kind, |t| t.as_ptr() as usize);
+        let raw = RawTermKind::from_term_kind(kind, |t| t.as_ptr() as *const u8);
         table.kind_index.get(&raw).copied()
             .unwrap_or_else(|| panic!("failed to find {:?} ({:?}) in table", kind, raw))
     })
@@ -60,16 +60,19 @@ pub fn kind_to_index(kind: TermKind) -> usize {
 pub unsafe fn term_kind_from_raw(raw: RawTermKind) -> TermKind {
     #[cfg(feature = "playback_term_table")]
     unsafe {
-        return raw.to_term_kind(|ptr_usize| {
-            Term::from_raw(&*(ptr_usize as *const RawTermKind))
+        use crate::logic::Term;
+        return raw.to_term_kind(|ptr| {
+            Term::from_raw(&*(ptr as *const RawTermKind))
         });
     }
     #[cfg(not(feature = "playback_term_table"))] {
+        let _ = raw;
         unreachable!("impossible: term_table::playback method was called, \
             but playback_term_table feature is disabled?");
     }
 }
 
+#[cfg(not(feature = "microram_api"))]
 pub fn load(r: impl Read) -> serde_cbor::Result<()> {
     TABLE.with(|table| {
         let mut table = table.borrow_mut();
@@ -85,7 +88,7 @@ pub fn load(r: impl Read) -> serde_cbor::Result<()> {
             let base = terms.as_ptr();
             for raw in terms.iter_mut() {
                 raw.adjust_pointers(|idx| {
-                    base.add(idx) as usize
+                    base.add(idx as usize) as *const u8
                 });
             }
 

@@ -1,6 +1,8 @@
-use std::cell::RefCell;
+use core::cell::RefCell;
+use alloc::vec::Vec;
 use std::collections::HashMap;
 use std::io::Write;
+use std::thread_local;
 use serde_cbor;
 use crate::logic::Term;
 use super::RawTermKind;
@@ -28,7 +30,7 @@ pub fn record(t: Term) {
     TABLE.with(|table| {
         let mut table = table.borrow_mut();
 
-        let raw = RawTermKind::from_term_kind(t.kind(), |t| table.get_index(t));
+        let raw = RawTermKind::from_term_kind(t.kind(), |t| table.get_index(t) as *const u8);
         let idx = table.terms.len();
         table.terms.push(raw);
 

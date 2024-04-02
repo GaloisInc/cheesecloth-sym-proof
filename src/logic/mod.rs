@@ -1,4 +1,7 @@
-use std::ops::Deref;
+use core::ops::Deref;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 use crate::logic::fold::Fold;
 use crate::logic::shift::ShiftExt;
 use crate::logic::subst::SubstExt;
@@ -18,7 +21,7 @@ pub mod wf;
 pub use self::term::{Term, TermKind};
 
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct VarId(u32);
 
 impl VarId {

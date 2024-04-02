@@ -1,5 +1,9 @@
+use core::hash::Hash;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use alloc::collections::BTreeMap;
+#[cfg(not(feature = "microram_api"))]
 use std::collections::HashMap;
-use std::hash::Hash;
 use crate::advice::Record;
 use crate::advice::map::AMap;
 use crate::logic::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder};
@@ -101,7 +105,26 @@ impl<T: EqShifted> EqShifted for Vec<T> {
     }
 }
 
+#[cfg(not(feature = "microram_api"))]
 impl<K: Eq + Hash, V: EqShifted> EqShifted for HashMap<K, V> {
+    fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        for (k, v1) in self {
+            let v2 = match other.get(k) {
+                Some(x) => x,
+                None => return false,
+            };
+            if !v1.eq_shifted(v2, amount) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl<K: Ord, V: EqShifted> EqShifted for BTreeMap<K, V> {
     fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
         if self.len() != other.len() {
             return false;

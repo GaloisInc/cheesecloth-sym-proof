@@ -1,10 +1,13 @@
-use std::fmt;
-use std::slice;
+use core::fmt;
+use core::slice;
 use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 
+#[cfg(not(feature = "microram_api"))]
 mod imp_vec {
-    use std::iter::FromIterator;
-    use std::ops::{Deref, DerefMut};
+    use core::iter::FromIterator;
+    use core::ops::{Deref, DerefMut};
+    use alloc::boxed::Box;
+    use alloc::vec::Vec;
     use crate::advice::{self, ChunkedRecordingStreamTag, RecordingStreamTag};
 
     pub struct AVec<T> {
@@ -19,6 +22,7 @@ mod imp_vec {
     }
 
     impl Recording {
+        #[cfg_attr(not(feature = "recording_avec_len"), allow(dead_code))]
         fn new(init_len: usize) -> Recording {
             let rs = advice::recording::avec_len::Tag.add_chunk();
             Recording {
@@ -111,13 +115,14 @@ mod imp_vec {
 }
 
 mod imp_box {
-    use std::iter::{self, FromIterator};
-    use std::mem::{self, MaybeUninit};
-    use std::ptr;
-    use std::slice;
-    use std::ops::{Deref, DerefMut};
+    use core::iter::{self, FromIterator};
+    use core::mem::{self, MaybeUninit};
+    use core::ptr;
+    use core::slice;
+    use core::ops::{Deref, DerefMut};
+    use alloc::boxed::Box;
+    use alloc::vec::Vec;
     use crate::advice::{self, PlaybackStreamTag};
-    use crate::advice::ChunkedRecordingStreamTag;
 
     pub struct AVec<T> {
         v: Box<[MaybeUninit<T>]>,
@@ -133,7 +138,7 @@ mod imp_box {
             }
         }
 
-        pub fn with_capacity(n: usize) -> AVec<T> {
+        pub fn with_capacity(_n: usize) -> AVec<T> {
             Self::new()
         }
 

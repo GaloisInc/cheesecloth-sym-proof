@@ -1,4 +1,7 @@
-use std::array;
+use core::array;
+use core::mem::MaybeUninit;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder};
 
 
@@ -119,7 +122,14 @@ impl<T: Fold> Fold for Vec<T> {
 
 impl<T: Fold, const N: usize> Fold for [T; N] {
     fn fold_with<F: Folder + ?Sized>(&self, f: &mut F) -> Self {
-        array::from_fn(|i| self[i].fold_with(f))
+        unsafe {
+            let mut arr = MaybeUninit::<[T; N]>::uninit();
+            let ptr = arr.as_mut_ptr() as *mut T;
+            for (i, x) in self.iter().enumerate() {
+                ptr.add(i).write(x.fold_with(f));
+            }
+            arr.assume_init()
+        }
     }
 }
 

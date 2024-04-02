@@ -174,6 +174,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cheesecloth-alloc"
+version = "0.1.0"
+
+[[package]]
 name = "cheesecloth-derive-ir-typed"
 version = "0.1.0"
 dependencies = [
@@ -189,6 +193,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "cheesecloth-sym-proof-secret-decls"
+version = "0.1.0"
+
+[[package]]
+name = "cheesecloth-sym-proof-secrets"
+version = "0.1.0"
+dependencies = [
+ "cheesecloth-sym-proof-secret-decls",
 ]
 
 [[package]]
@@ -477,9 +492,9 @@ checksum = "01cda141df6706de531b6c46c3a33ecca755538219bd484262fa09410c13539c"
 
 [[package]]
 name = "log"
-version = "0.4.19"
+version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b06a4cde4c0f271a446782e3eff8de789548ce57dbc8eca9292c27f4a42004b4"
+checksum = "518ef76f2f87365916b142844c16d8fefd85039bc5699050210a7778ee1cd1de"
 
 [[package]]
 name = "matrixmultiply"
@@ -933,6 +948,9 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "cheesecloth",
+ "cheesecloth-alloc",
+ "cheesecloth-sym-proof-secret-decls",
+ "cheesecloth-sym-proof-secrets",
  "env_logger",
  "log",
  "serde",

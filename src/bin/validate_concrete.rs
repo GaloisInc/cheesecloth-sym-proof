@@ -5,6 +5,7 @@ use env_logger;
 use log::trace;
 use witness_checker::micro_ram::types::Advice;
 use sym_proof::{Addr, Word, WORD_BYTES};
+use sym_proof::micro_ram::Opcode;
 use sym_proof::micro_ram::import;
 
 fn run(path: &str) {
@@ -27,8 +28,16 @@ fn run(path: &str) {
     let mut state = init_state;
     let mut cycle = 0;
     let mut mem_op_count = 0;
+    let mut saved_advice = Vec::new();
     eprintln!("trace: {} chunks", exec.trace.len());
     for (i, chunk) in exec.trace.iter().enumerate() {
+        let seg = &exec.segments[chunk.segment];
+        if seg.init_pc() == Some(0x8000_0000) {
+            saved_advice.push(state.cycle);
+            saved_advice.push(state.pc);
+            state.pc = 0x8000_0000;
+        }
+
         trace!("cycle {}: trace chunk {}: {} states, segment {}", cycle, i, chunk.states.len(), chunk.segment);
         for ram_state in &chunk.states {
             let expect_state = import::convert_ram_state(ram_state);
@@ -42,7 +51,7 @@ fn run(path: &str) {
                 continue;
             }
 
-            let advice = advs.iter().filter_map(|adv| match *adv {
+            let mut advice = advs.iter().filter_map(|adv| match *adv {
                 Advice::Advise { advise } => Some(advise),
                 _ => None,
             }).next();
@@ -55,8 +64,17 @@ fn run(path: &str) {
             let instr = prog.get(&pc).cloned().unwrap_or_else(|| {
                 panic!("program executed out of bounds at {}", pc);
             });
+
+            if instr.opcode == Opcode::Advise && advice.is_none() {
+                advice = saved_advice.pop();
+            }
+
             trace!("exec {:?}, pc = {}, regs = {:?}", instr, state.pc, state.regs);
+            if state.cycle < 200 {
+                eprintln!("step: {:?}, {:?}", instr, advice);
+            }
             state.step(instr, advice);
+            eprintln!("stepped: pc = {}, cyc = {}", state.pc, state.cycle);
 
             assert_eq!(state.pc, expect_state.pc, "after cycle {}", cycle);
             assert_eq!(state.regs, expect_state.regs, "\n after cycle {} and pc {}", cycle, state.pc);
@@ -65,20 +83,20 @@ fn run(path: &str) {
                 if let Advice::MemOp { addr, value, .. } = *adv {
                     let offset_mask = WORD_BYTES as Addr - 1;
                     let word_addr = addr as Addr & !offset_mask;
-		    // Check if the address has been written to.
-		    if state.mem.contains_key(&word_addr) {
-			assert_eq!(state.mem[&word_addr], value as Word,
-                        "at address {}, after cycle {}", addr, cycle);
-		    } else {
-			// If the address hasn't been written to, we
-			// default to 0.  This can happen, for
-			// example, when RiscV want's to write a byte
-			// to a fresh address.  It will first read the
-			// word and modify the byte, preserving the
-			// rest of the word (possibly uninitialized)
-			assert_eq!(value, 0, "at address {}, after cycle {} (default value)", addr, cycle);
-		    }
-		    mem_op_count += 1;
+                    // Check if the address has been written to.
+                    if state.mem.contains_key(&word_addr) {
+                        assert_eq!(state.mem[&word_addr], value as Word,
+                            "at address {}, after cycle {}", addr, cycle);
+                    } else {
+                        // If the address hasn't been written to, we
+                        // default to 0.  This can happen, for
+                        // example, when RiscV want's to write a byte
+                        // to a fresh address.  It will first read the
+                        // word and modify the byte, preserving the
+                        // rest of the word (possibly uninitialized)
+                        assert_eq!(value, 0, "at address {}, after cycle {} (default value)", addr, cycle);
+                    }
+                    mem_op_count += 1;
                 }
             }
 

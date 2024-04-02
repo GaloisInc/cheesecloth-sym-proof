@@ -57,39 +57,45 @@ fn run(path: &str) -> Result<(), String> {
 
     let mut pf = Proof::new(prog);
 
-    let arith_n_minus_1_ne_0 = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+
+    // Set up initial proof context
+    //
+    // Unlike `proof_sqrt`, we don't wrap these in `advice::dont_record`.  In `proof_sqrt`, we want
+    // to avoid recording the rule application.  Here, the rule application has already been
+    // omitted, but we'd like to record any `Term`s, `AVec`s, etc. that may show up during the
+    // application of this rule.
+
+    // Arithmetic lemmas.
+
+    let _arith_2n_plus_k_ne_1 = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
         let n = vars.fresh();
-        // n > 1
-        let n_limit = Prop::Nonzero(Term::cmpa(n, 1.into()));
-        // (n - 1) != 0
-        let n_minus_1 = Term::sub(n, 1.into());
-        let concl = Prop::Nonzero(Term::cmpe(Term::cmpe(n_minus_1, 0.into()), 0.into()));
-        (vec![n_limit].into(), Box::new(concl))
+        let a = vars.fresh();
+        // n < 2_000_000_000
+        let n_limit = Prop::Nonzero(Term::cmpa(2_000_000_000.into(), n));
+        // 1 < a
+        let a_min = Prop::Nonzero(Term::cmpa(a, 1.into()));
+        // a < 10
+        let a_max = Prop::Nonzero(Term::cmpa(10.into(), a));
+        // (2 * n + a == 1) == 0
+        let a = Term::add(Term::mull(2.into(), n), a);
+        let eq = Term::cmpe(1.into(), a);
+        let ne = Prop::Nonzero(Term::cmpe(eq, 0.into()));
+        (vec![n_limit, a_min, a_max].into(), Box::new(ne))
     })));
 
-    let arith_n_plus_1_gt_1 = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
-        let n = vars.fresh();
-        // n > 0
-        let n_lo = Prop::Nonzero(Term::cmpa(n, 0.into()));
-        // n < 1000
-        let n_hi = Prop::Nonzero(Term::cmpa(1000.into(), n));
-        // n + 1 > 1
-        let concl = Prop::Nonzero(Term::cmpa(Term::add(n, 1.into()), 1.into()));
-        (vec![n_lo, n_hi].into(), Box::new(concl))
+    let _arith_lt_sub_1 = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+        let a = vars.fresh();
+        let b = vars.fresh();
+        // 0 < a
+        let low = Prop::Nonzero(Term::cmpa(a, 0.into()));
+        // a < b
+        let high = Prop::Nonzero(Term::cmpa(b, a));
+        // a - 1 < b
+        let concl = Prop::Nonzero(Term::cmpa(b, Term::sub(a, 1.into())));
+        (vec![low, high].into(), Box::new(concl))
     })));
 
-    let arith_n_minus_1_lt_1000 = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
-        let n = vars.fresh();
-        // n > 0
-        let n_lo = Prop::Nonzero(Term::cmpa(n, 0.into()));
-        // n < 1000
-        let n_hi = Prop::Nonzero(Term::cmpa(1000.into(), n));
-        // n + 1 > 1
-        let concl = Prop::Nonzero(Term::cmpa(1000.into(), Term::sub(n, 1.into())));
-        (vec![n_lo, n_hi].into(), Box::new(concl))
-    })));
-
-    let arith_add_assoc = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+    let _arith_add_assoc = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
         let a = vars.fresh();
         let b = vars.fresh();
         let c = vars.fresh();
@@ -99,12 +105,42 @@ fn run(path: &str) -> Result<(), String> {
         (vec![].into(), Box::new(concl))
     })));
 
+    let _arith_2n_plus_k_32bit = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+        let n = vars.fresh();
+        let a = vars.fresh();
+        // n < 2_000_000_000
+        let n_limit = Prop::Nonzero(Term::cmpa(2_000_000_000.into(), n));
+        // a < 10
+        let a_limit = Prop::Nonzero(Term::cmpa(10.into(), a));
+        let l = Term::add(Term::mull(2.into(), n), a);
+        let concl = Prop::Nonzero(Term::cmpa((1 << 32).into(), l));
+        (vec![n_limit, a_limit].into(), Box::new(concl))
+    })));
+
+    let _arith_32bit_mask = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+        let a = vars.fresh();
+        // a < 2^32
+        let a_limit = Prop::Nonzero(Term::cmpa((1 << 32).into(), a));
+        let l = Term::and(a, 0xffff_ffff.into());
+        let r = a;
+        let concl = Prop::Nonzero(Term::cmpe(l, r));
+        (vec![a_limit].into(), Box::new(concl))
+    })));
+
+    let _arith_sign_extend_ne_1 = pf.rule_admit(Prop::Forall(Binder::new(|vars| {
+        let a = vars.fresh();
+        // a < 2^32
+        let a_limit = Prop::Nonzero(Term::cmpa((1 << 32).into(), a));
+        // a != 1
+        let a_ne_1 = Prop::Nonzero(Term::cmpe(Term::cmpe(1.into(), a), 0.into()));
+        let l1 = Term::mull(Term::shr(a, 31.into()), 0xffff_ffff_0000_0000.into());
+        let l = Term::or(l1, a);
+        let concl = Prop::Nonzero(Term::cmpe(Term::cmpe(l, 1.into()), 0.into()));
+        (vec![a_limit, a_ne_1].into(), Box::new(concl))
+    })));
+
+
     // `conc_state` is reachable.
-    //
-    // Unlike `proof_grit`, we don't wrap this in `advice::dont_record`.  In `proof_grit`, we want
-    // to avoid recording the rule application.  Here, the rule application has already been
-    // omitted, but we'd like to record any `Term`s, `AVec`s, etc. that may show up during the
-    // application of this rule.
     pf.rule_admit(Prop::Reachable(ReachableProp {
         pred: Binder::new(|_vars| {
             StatePred {
@@ -119,6 +155,7 @@ fn run(path: &str) -> Result<(), String> {
         }),
         min_cycles: conc_state.cycle.into(),
     }));
+
 
     interp::playback_proof(&mut pf, advice::playback::rules::Tag);
 

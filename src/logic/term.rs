@@ -1,26 +1,17 @@
-use std::cell::RefCell;
-use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
-use std::mem::{self, ManuallyDrop};
-use bumpalo::Bump;
 use crate::{Word, BinOp};
-use crate::advice;
 use crate::logic::VarId;
-use crate::logic::print::Printer;
 
 
+#[cfg(not(feature = "microram_api"))]
 mod imp_interner {
-    use std::cell::RefCell;
+    #![cfg_attr(feature = "playback_term_table", allow(dead_code))]
+    use core::cell::RefCell;
     use std::collections::HashSet;
-    use std::hash::{Hash, Hasher};
-    use std::marker::PhantomData;
-    use std::mem::{self, ManuallyDrop};
+    use std::thread_local;
+    use core::hash::{Hash, Hasher};
+    use core::marker::PhantomData;
+    use core::mem::{self, ManuallyDrop};
     use bumpalo::Bump;
-    use crate::{Word, BinOp};
-    use crate::advice;
-    use crate::logic::VarId;
-    use crate::logic::print::Printer;
     use crate::logic::term::TermKind;
 
     #[derive(Default)]
@@ -100,7 +91,7 @@ mod imp_interner {
                         interner.hash.insert(alloc);
                         let t = Term(alloc, PhantomData);
                         #[cfg(feature = "recording_term_table")] {
-                            advice::term_table::recording::record(t);
+                            crate::advice::term_table::recording::record(t);
                         }
                         t
                     },
@@ -123,19 +114,12 @@ mod imp_interner {
 }
 
 mod imp_prealloc {
-    use std::cell::RefCell;
-    use std::collections::HashSet;
-    use std::hash::{Hash, Hasher};
-    use std::marker::PhantomData;
-    use std::mem::{self, ManuallyDrop};
-    use bumpalo::Bump;
-    use crate::{Word, BinOp};
-    use crate::advice;
+    #![cfg_attr(not(feature = "playback_term_table"), allow(dead_code))]
+    use core::hash::{Hash, Hasher};
+    use core::marker::PhantomData;
     #[allow(unused)] use crate::advice::{PlaybackStreamTag, RecordingStreamTag};
     use crate::advice::term_table::RawTermKind;
     use crate::advice::term_table::playback;
-    use crate::logic::VarId;
-    use crate::logic::print::Printer;
     use crate::logic::term::TermKind;
 
 
@@ -171,13 +155,13 @@ mod imp_prealloc {
             #[cfg(not(feature = "playback_term_intern_index"))] {
                 let index = playback::kind_to_index(kind);
                 #[cfg(feature = "recording_term_intern_index")] {
-                    advice::recording::term_intern_index::Tag.record(&index);
+                    crate::advice::recording::term_intern_index::Tag.record(&index);
                 }
                 return Self::from_table_index(index);
             }
 
             #[cfg(feature = "playback_term_intern_index")] {
-                let index = advice::playback::term_intern_index::Tag.playback::<usize>();
+                let index = crate::advice::playback::term_intern_index::Tag.playback::<usize>();
                 let t = Self::from_table_index(index);
                 require_eq!(t.kind(), kind, "bad advice: wrong index for interned term");
                 t
@@ -241,10 +225,20 @@ impl Term {
         }
     }
 
-    pub fn as_const_or_err(&self) -> Result<Word, String> {
+    #[cfg(feature = "verbose")]
+    pub fn as_const_or_err(&self) -> Result<Word, alloc::string::String> {
+        use crate::logic::print::Printer;
         match self.kind() {
             TermKind::Const(x) => Ok(x),
-            ref t => Err(format!("expected const, but got {}", Printer::new(0).display(t))),
+            ref t => Err(alloc::format!("expected const, but got {}", Printer::new(0).display(t))),
+        }
+    }
+
+    #[cfg(not(feature = "verbose"))]
+    pub fn as_const_or_err(&self) -> Result<Word, &'static str> {
+        match self.kind() {
+            TermKind::Const(x) => Ok(x),
+            _ => Err("expected const"),
         }
     }
 

@@ -1,6 +1,8 @@
-use std::collections::HashSet;
-use std::fmt;
-use std::rc::Rc;
+use core::fmt;
+use alloc::boxed::Box;
+use alloc::collections::BTreeSet;
+use alloc::rc::Rc;
+use alloc::vec::Vec;
 use crate::{BinOp, Addr};
 use super::{VarId, Term, TermKind, Prop, ReachableProp, StatePred, Binder, VarCounter};
 use crate::symbolic::{MemState, MemConcrete, MemMap, MemSnapshot, MemLog, MemMulti};
@@ -218,7 +220,7 @@ impl Print for StatePred {
     fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "pc = {}", self.state.pc)?;
 
-        let mut vars_mentioned_in_props = HashSet::new();
+        let mut vars_mentioned_in_props = BTreeSet::new();
         for p in self.props.iter() {
             p.for_each_var(&mut |v| -> Option<()> {
                 vars_mentioned_in_props.insert(v);
@@ -283,7 +285,7 @@ impl Print for MemState {
 }
 
 impl Print for MemConcrete {
-    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+    fn print(&self, _p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         let mut kvs = self.m.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>();
         kvs.sort();
         for (i, (k, v)) in kvs.into_iter().enumerate() {
@@ -322,22 +324,26 @@ impl Print for MemMap {
 
         let mut addr = 0;
         let mut size = 0;
-        let mut value = Term::const_(0);
+        // Can't use `Term::const_(0)` as a default here because that introduces an extra advice
+        // call in verbose mode.
+        let mut value = None;
         let mut base = 0;
 
         for (&k, &(v, b)) in self.m.iter() {
-            if k == addr + size as Addr && v == value && b == base + size {
+            if k == addr + size as Addr && Some(v) == value && b == base + size {
                 size += 1;
             } else {
-                emit(addr, size, value, base)?;
+                if let Some(value) = value {
+                    emit(addr, size, value, base)?;
+                }
                 addr = k;
                 size = 1;
-                value = v;
+                value = Some(v);
                 base = b;
             }
         }
 
-        if size > 0 {
+        if let Some(value) = value {
             emit(addr, size, value, base)?;
         }
         Ok(())
@@ -345,19 +351,19 @@ impl Print for MemMap {
 }
 
 impl Print for MemSnapshot {
-    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+    fn print(&self, _p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MemSnapshot @{:x}", self.base)
     }
 }
 
 impl Print for MemLog {
-    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+    fn print(&self, _p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MemLog [{} entries]", self.l.len())
     }
 }
 
 impl Print for MemMulti {
-    fn print(&self, p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
+    fn print(&self, _p: &Printer, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MemMulti [{} parts]", self.conc.len() + self.objs.len() + self.sym.len())
     }
 }

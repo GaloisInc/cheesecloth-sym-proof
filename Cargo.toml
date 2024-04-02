@@ -7,27 +7,65 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+
+cheesecloth-sym-proof-secret-decls = { path = "secret-decls" }
+cheesecloth-sym-proof-secrets = { path = "secrets", optional = true }
+
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+log = { version = "=0.4.18", features = ["release_max_level_off"] }
+
+cheesecloth-alloc = { path = "../rust-support/cheesecloth-alloc", optional = true }
+
+# These lines will be excluded when building for MicroRAM
 witness-checker = { path = "../witness-checker", package = "cheesecloth" }
 
-serde = { version = "1", features = ["derive"] }
-serde_cbor = "0.10"
-serde_json = "1"
-serde_yaml = "0.8"
+serde_cbor = { version = "0.10" }
+serde_json = { version = "1" }
+serde_yaml = { version = "0.8" }
 
-log = "0.4"
-env_logger = "0.7"
-bumpalo = "3.14.0"
+env_logger = { version = "0.7", default-features = false }
+bumpalo = { version = "3.14.0" }
+
+[package.metadata.microram]
+# Only these dependencies are kept when building for microram.
+deps = ["serde", "log", "cheesecloth-alloc", "cheesecloth-sym-proof-secret-decls"]
+# These binary targets are kept when building for microram, with adjusted
+# `path`s.
+bins = ["interp_grit_microram", "interp_sqrt_microram"]
+remove-features = ["inline-secrets"]
+
+
+[workspace]
+members = ["secret-decls", "secrets"]
+
 
 [features]
 verbose = []
 debug_symbolic = []
+# Use MicroRAM `__cc_*` APIs within the sym_proof library.  These can either be
+# provided by the MicroRAM compiler or emulated with Rust code.
+microram_api = ["stage4"]
+# Build for running on MicroRAM.  This omits the emulation for `__cc_*` APIs.
+microram = ["microram_api", "cheesecloth-alloc"]
+# Use a hardcoded snapshot instead of receiving it via spontaneous jump from a
+# concrete execution.
+microram_hardcoded_snapshot = []
+deny_warnings = []
+
+# Enable to include secrets inline in the build.  This is useful when doing
+# native builds for testing, but can't be used when building to run in zero
+# knowledge, as the optimizer might consult the secret values and thus produce
+# different results on the prover and verifier.
+inline-secrets = ["cheesecloth-sym-proof-secrets"]
 
 stage0 = [
+    "recording_concrete_state",
     "recording_rules",
     "recording_search_index",
     "recording_terms",
 ]
 stage1 = [
+    "playback_concrete_state",
     "playback_rules",
     "playback_search_index",
     "playback_terms",
@@ -37,6 +75,7 @@ stage1 = [
     "recording_amap_keys",
 ]
 stage2 = [
+    "playback_concrete_state",
     "playback_rules",
     "playback_search_index",
     "playback_term_table",
@@ -47,6 +86,7 @@ stage2 = [
     "recording_amap_access",
 ]
 stage3 = [
+    "playback_concrete_state",
     "playback_rules",
     "playback_search_index",
     "playback_term_table",
@@ -58,6 +98,7 @@ stage3 = [
     "recording_linear",
 ]
 stage4 = [
+    "playback_concrete_state",
     "playback_rules",
     "playback_search_index",
     "playback_term_table",
@@ -69,6 +110,8 @@ stage4 = [
     "playback_linear",
 ]
 
+recording_concrete_state = []
+playback_concrete_state = []
 recording_rules = []
 playback_rules = []
 recording_terms = []
@@ -92,10 +135,40 @@ playback_linear = []
 
 # When adding new advice streams, be sure to update `doc/advice.md`.
 
+
+[[bin]]
+name = "interp_grit"
+required-features = ["playback_concrete_state"]
+
+[[bin]]
+name = "interp_grit_microram"
+required-features = ["microram_api"]
+
 [[bin]]
 name = "proof_sqrt"
 required-features = ["debug_symbolic"]
 
+[[bin]]
+name = "interp_sqrt"
+required-features = ["playback_concrete_state"]
+
+[[bin]]
+name = "interp_sqrt_microram"
+required-features = ["microram_api"]
+
+
 [profile.dev]
 opt-level = 1
 debug = 2
+
+# `build_microram.sh` uses the release profile.  We enable LTO and disbale
+# codegen units so that `--emit llvm-bc` outputs a single bitcode file
+# containing all binary and library code.
+#
+# Unfortunately, custom profiles are not supported in the toolchain we use for
+# compiling to microram (rust 1.56).
+[profile.release]
+lto = true
+panic = "abort"
+incremental = false
+codegen-units = 1
