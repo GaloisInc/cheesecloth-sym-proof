@@ -215,7 +215,11 @@ pub trait Tactics<'a> {
     fn show_context(&self) {
         show_context_common(self.proof(), false)
     }
+    fn show_prop(&self, id:PropId) {
+        show_prop_common(self.proof(), false, id)
+    }
 
+    
     fn show_context_verbose(&self) {
         show_context_common(self.proof(), true)
     }
@@ -232,10 +236,39 @@ pub trait ReachTactics<'a, 'b: 'a> {
     fn proof_mut(&mut self) -> &mut ReachProof<'a, 'b>;
 
     /// Apply `rule_step` repeatedly until it returns `Err`.
+
     fn tactic_run(&mut self) {
         let pf = self.proof_mut();
-        while pf.try_rule_step() {
+        while pf.try_rule_step().is_ok() {
             // No-op
+        }
+    }
+
+    /// Apply `rule_step` repeatedly until it returns `Err`, showing the error when it fails
+    fn tactic_run_db(&mut self) {
+        let pf = self.proof_mut();
+        while true {
+            match pf.try_rule_step() {
+                Err (msg) => {
+                    eprintln!("Simple step failed with {}", msg);
+                    return
+                }
+                Ok (_) => ()
+            }
+        }
+    }
+
+    /// Apply `rule_step` repeatedly until it returns `Err`, showing the error when it fails
+    fn tactic_run_concrete(&mut self) {
+        let pf = self.proof_mut();
+        while true {
+            match pf.try_rule_step_concrete() {
+                Err (msg) => {
+                    eprintln!("Concrete step failed with {}", msg);
+                    return
+                }
+                Ok (_) => ()
+            }
         }
     }
 
@@ -243,7 +276,7 @@ pub trait ReachTactics<'a, 'b: 'a> {
     /// error before `pc` is reached.
     fn tactic_run_until(&mut self, pc: Addr) {
         let pf = self.proof_mut();
-        while pf.pc() != pc && pf.try_rule_step() {
+        while pf.pc() != pc && pf.try_rule_step().is_ok() {
             // No-op
         }
     }
@@ -279,6 +312,26 @@ fn require_local_prop(pf: &Proof, pid: PropId) -> usize {
         pf.scopes().len(), s,
     );
     i
+}
+
+fn show_prop_common(pf: &Proof, verbose: bool, id:PropId) {
+    let (scope, index) = id;
+    let scope_len = pf.scopes().len();
+    if scope < scope_len {
+        let p = &pf.scopes()[scope].props[index];
+        eprintln!(
+            "{}.{}: {}", scope, index,
+            pf.printer_depth(scope as u32).verbose(verbose).display(&p),
+        );
+    } else if scope == scope_len {
+        let p = &pf.props()[index];
+        eprintln!(
+            "{}.{}: {}", scope_len, index,
+            pf.printer_depth(index as u32).verbose(verbose).display(&p),
+        );
+    } else {
+        eprintln!("Error: Printing prop id not in scope: {}.{} not in {}", scope, index, pf.scopes().len());
+    }
 }
 
 fn show_context_common(pf: &Proof, verbose: bool) {

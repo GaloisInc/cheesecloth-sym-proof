@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::{Word, WORD_BYTES, Addr};
+use crate::{Word, WORD_BYTES, WORD_BITS, Addr};
 use crate::advice::map::AMap;
 use crate::advice::vec::AVec;
 use crate::micro_ram::{self, NUM_REGS, MemWidth, Reg, Operand, Instr};
@@ -16,10 +16,10 @@ pub trait Memory {
     fn load(&self, w: MemWidth, addr: Term, props: &[Prop]) -> Result<Term, String>;
 
     /// Copy the words at `addrs` from `src` to `dest`.
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String>;
 }
@@ -54,18 +54,18 @@ impl Memory for MemState {
         }
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String> {
         match *self {
-            MemState::Concrete(ref mut m) => m.copy_words_from(src, addrs, props),
-            MemState::Map(ref mut m) => m.copy_words_from(src, addrs, props),
-            MemState::Snapshot(ref mut m) => m.copy_words_from(src, addrs, props),
-            MemState::Log(ref mut m) => m.copy_words_from(src, addrs, props),
-            MemState::Multi(ref mut m) => m.copy_words_from(src, addrs, props),
+            MemState::Concrete(ref mut m) => m.copy_from(src, addrs, props),
+            MemState::Map(ref mut m) => m.copy_from(src, addrs, props),
+            MemState::Snapshot(ref mut m) => m.copy_from(src, addrs, props),
+            MemState::Log(ref mut m) => m.copy_from(src, addrs, props),
+            MemState::Multi(ref mut m) => m.copy_from(src, addrs, props),
         }
     }
 }
@@ -113,17 +113,17 @@ impl EqShifted for MemState {
 }
 
 
-fn copy_words_from_generic<D: Memory, S: Memory>(
+fn copy_from_generic<D: Memory, S: Memory>(
     dest: &mut D,
     src: &S,
-    addrs: impl IntoIterator<Item = Addr>,
+    addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
     props: &[Prop],
 ) -> Result<(), String> {
-    for addr in addrs {
-        assert!(addr % WORD_BYTES == 0, "misaligned access at address 0x{:x}", addr);
+    for (addr, w) in addrs {
+        assert!(addr % w.bytes() == 0, "misaligned access at address 0x{:x}, width {:?}", addr, w);
         let addr = Term::const_(addr);
-        let val = src.load(MemWidth::WORD, addr, props)?;
-        dest.store(MemWidth::WORD, addr, val, props)?;
+        let val = src.load(w, addr, props)?;
+        dest.store(w, addr, val, props)?;
     }
     Ok(())
 }
@@ -150,13 +150,13 @@ impl Memory for MemConcrete {
         Ok(Term::const_(val))
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String> {
-        copy_words_from_generic(self, src, addrs, props)
+        copy_from_generic(self, src, addrs, props)
     }
 }
 
@@ -190,6 +190,14 @@ impl EqShifted for MemConcrete {
 }
 
 
+fn extract_subword(t_const: Word, width: Word, offset: u8) -> Word {
+    let WORD_SIZE : u64 = WORD_BITS / WORD_BYTES;
+    let mask = (1u64 << width) - 1; // Create a mask with 'width' bits set to 1
+    let shifted_mask = mask << (offset as u64 * WORD_SIZE); // Shift the mask to the desired position
+
+    (t_const & shifted_mask) >> (offset as u64 * WORD_SIZE) // Apply the mask and shift to get the subword
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MemMap {
     /// Map from byte address to value.  Each value is a single byte extracted from a `Word`-sized
@@ -210,13 +218,13 @@ impl Memory for MemMap {
         self.load_concrete(w, addr)
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String> {
-        copy_words_from_generic(self, src, addrs, props)
+        copy_from_generic(self, src, addrs, props)
     }
 }
 
@@ -233,14 +241,22 @@ impl MemMap {
     }
 
     pub fn load_concrete(&self, w: MemWidth, addr: Addr) -> Result<Term, String> {
+        match self.load_concrete_splice(w, addr) {
+            Ok(result_word) => return Ok(Term::const_(result_word)),
+            Err(_) => {},
+        }
+
         // We currently require the load to match a store exactly, so each consecutive address must
         // contain the next consecutive byte in order (starting from zero), and all bytes should be
         // extracted from the same expression.
+        // UNLESS the stored value is concrete, so we can just splice it as normal.
         let val = match self.m.get(&addr) {
             Some(&(t, offset)) => {
                 if offset != 0 {
-                    return Err(format!("NYI: load requires splicing bytes: \
-                        at 0x{:x}, got offset {}, but expected 0", addr, offset));
+                    // Require t to be concrete
+                    return Err(format!("NYI: load requires splicing bytes when not concrete: \
+                        at 0x{:x}, got offset {}, but expected 0. Symbolic term: {:?}",
+                        addr, offset, t))
                 }
                 t
             },
@@ -277,6 +293,37 @@ impl MemMap {
         }
 
         Ok(val)
+    }
+
+    /// Try to load concrete values from the memory.
+    fn load_concrete_splice(&self, w: MemWidth, addr: Word) -> Result<Word, String> {
+        // Initialize the result word
+        let mut result_word: u64 = 0;
+        let mut byte: u64 = 0;
+
+        for offset in 0 .. w.bytes() {
+            match self.m.get(&(addr + offset)) {
+                Some(&(t, loaded_offset)) => {
+                    // Require t to be concrete
+                    match t.as_const() {
+                        Some(val) => {
+                            byte = (val >> (loaded_offset * 8)) & (0xFF);
+                            result_word = result_word | (byte << offset * 8) as u64
+                        },
+                        None =>
+                            return Err(format!("Loaded values are not concrete: \
+                                at 0x{:x}, got offset {}, but expected 0. Symbolic term: {:?}",
+                                addr, offset, t)),
+                    }
+                },
+                None => {
+                    return Err(format!("failed to load from address 0x{:x}: uninitialized data",
+                        addr + offset));
+                },
+            }
+        }
+
+        Ok(result_word)
     }
 }
 
@@ -332,10 +379,10 @@ impl Memory for MemSnapshot {
         Ok(Term::const_(val))
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         _src: &S,
-        _addrs: impl IntoIterator<Item = Addr>,
+        _addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         _props: &[Prop],
     ) -> Result<(), String> {
         panic!("can't store to MemSnapshot");
@@ -403,13 +450,13 @@ impl Memory for MemLog {
         Err("MemLog load NYI".into())
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String> {
-        copy_words_from_generic(self, src, addrs, props)
+        copy_from_generic(self, src, addrs, props)
     }
 }
 
@@ -540,13 +587,13 @@ impl Memory for MemMulti {
         self.region(kind, i).load(w, offset, props)
     }
 
-    fn copy_words_from<S: Memory>(
+    fn copy_from<S: Memory>(
         &mut self,
         src: &S,
-        addrs: impl IntoIterator<Item = Addr>,
+        addrs: impl IntoIterator<Item = (Addr, MemWidth)>,
         props: &[Prop],
     ) -> Result<(), String> {
-        copy_words_from_generic(self, src, addrs, props)
+        copy_from_generic(self, src, addrs, props)
     }
 }
 
@@ -816,7 +863,10 @@ impl Fold for State {
 
 impl EqShifted for State {
     fn eq_shifted(&self, other: &Self, amount: u32) -> bool {
-        let State { pc, ref regs, ref mem } = *self;
+        let State {
+            pc, ref regs, ref mem,
+            #[cfg(feature = "debug_symbolic")] conc_st: _,
+        } = *self;
         pc.eq_shifted(&other.pc, amount)
             && regs.eq_shifted(&other.regs, amount)
             && mem.eq_shifted(&other.mem, amount)

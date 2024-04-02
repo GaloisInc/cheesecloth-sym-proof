@@ -91,3 +91,11 @@ recording_linear = []
 playback_linear = []
 
 # When adding new advice streams, be sure to update `doc/advice.md`.
+
+[[bin]]
+name = "proof_sqrt"
+required-features = ["debug_symbolic"]
+
+[profile.dev]
+opt-level = 1
+debug = 2

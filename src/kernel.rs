@@ -664,9 +664,13 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         self.cycles
     }
 
-
     pub fn pc(&self) -> Addr {
         self.state.pc
+    }
+
+    #[cfg(feature = "debug_symbolic")]
+    pub fn print_conc_st(&self) {
+        eprintln!("CONCRETE REGS: {:?}",self.state.conc_st.clone().map(|st| st.regs));
     }
 
     fn get_instr_at(&self, pc:Addr) -> Instr {
@@ -697,8 +701,8 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     }
 
     fn mem_load(&self, w: MemWidth, addr: Term) -> Term {
-        let _ = (w, addr);
-        die!("StepProof::mem_load not yet implemented")
+        self.state.mem.load(w, addr, &[])
+            .unwrap_or_else(|e| die!("mem_load failed: {}", e))
     }
 
     fn finish_instr(&mut self) {
@@ -774,8 +778,32 @@ impl<'a, 'b> ReachProof<'a, 'b> {
                 self.finish_instr_jump(dest);
                 return;
             },
-            Opcode::Cjmp => die!("can't use rule_step for Cjmp"),
-            Opcode::Cnjmp => die!("can't use rule_step for Cnjmp"),
+            Opcode::Cjmp => {
+                let cond = x.as_const_or_err()
+                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
+                let dest = y.as_const_or_err()
+                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
+                if cond == 0 {
+                    self.finish_instr();
+                    return;
+                } else {
+                    self.finish_instr_jump(dest);
+                    return;
+                }
+            },
+            Opcode::Cnjmp => {
+                let cond = x.as_const_or_err()
+                    .unwrap_or_else(|e| die!("when evaluating Cjmp cond {e}"));
+                let dest = y.as_const_or_err()
+                    .unwrap_or_else(|e| die!("when evaluating jmp dest: {e}"));
+                if cond != 0 {
+                    self.finish_instr();
+                    return;
+                } else {
+                    self.finish_instr_jump(dest);
+                    return;
+                }
+            },
 
             // Note: `mem_store` and `mem_load` can fail.  For `try_rule_step`, it's important that
             // we not perform any side effects prior to a panic.
@@ -807,7 +835,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Try to take a step.  Returns `true` on success or `false` if `rule_step` panics.  On
     /// failure, the proof state remains unchanged.
-    pub fn try_rule_step(&mut self) -> bool {
+    pub fn try_rule_step(&mut self) -> Result<(),String> {
         use std::panic::{self, AssertUnwindSafe};
 
         // Use an empty panic hook to suppress the "thread 'main' panicked at ..." message.
@@ -817,15 +845,46 @@ impl<'a, 'b> ReachProof<'a, 'b> {
         let f = AssertUnwindSafe(|| {
             self.rule_step();
         });
-        let ok = panic::catch_unwind(|| {
+        let result = panic::catch_unwind(|| {
             advice::rollback_on_panic(f);
-        }).is_ok();
+        });
 
         panic::set_hook(old_hook);
+
+        //Easily readable error for debugging tactics
+        let ok: Result<(), String> = match result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if let Some(msg) = err.downcast_ref::<&'static str>() {
+                    Err(format!("Panic message: {}", msg))
+                } else if let Some(msg) = err.downcast_ref::<String>() {
+                    Err(format!("Panic message: {}", msg))
+                } else {
+                    // If downcast to String or CustomError fails, provide a default error message
+                    Err(format!("Unknown error occurred of type: {:?}", err))
+                }
+            }
+        };
 
         ok
     }
 
+    /// Try to take a step only on concrete values.  Returs `false` if
+    /// `rule_step` panics or one of the input registers is not a
+    /// constant. On loads, it can still sneak symbolic values from
+    /// memory into registers. On failure, the proof state remains
+    /// unchanged.
+    pub fn try_rule_step_concrete(&mut self) -> Result<(),String> {
+        let instr = self.fetch_instr();
+        let x = self.reg_value(instr.r1);
+        let y = self.operand_value(instr.op2);
+
+        if x.is_const() && y.is_const(){
+            return self.try_rule_step()
+        } else {
+            return Err(format!("Concrete step failed for instr {:?}. With r1({:?})= {:?} and r2({:?}) {:?}", instr, instr.r1, x, instr.op2, y))
+        }
+    }
     /// Handle a conditional jump (`Opcode::Cjmp` or `Opcode::Cnjmp`), taking the jump if `taken`
     /// is set and falling through otherwise.  There must be a `Prop` in scope (either in the
     /// current scope or an outer scope) showing that the jump condition will result in the
@@ -925,15 +984,15 @@ impl<'a, 'b> ReachProof<'a, 'b> {
     /// Common logic for `rule_mem_abs_*`.  Takes an empty `MemState `new`, sets `self.state.mem`
     /// to `new`, and copies words from the old `MemState` to the new one at each of the provided
     /// `addrs`.
-    fn mem_abs_common(&mut self, new: MemState, addrs: &[Addr]) {
+    fn mem_abs_common(&mut self, new: MemState, addrs: &[(Addr, MemWidth)]) {
         let old = mem::replace(&mut self.state.mem, new);
         let new = &mut self.state.mem;
-        require_ok!(new.copy_words_from(&old, addrs.iter().copied(), &[]));
+        require_ok!(new.copy_from(&old, addrs.iter().copied(), &[]));
     }
 
     /// Convert `self.state.mem` to `MemState::Concrete`, and abstract by forgetting all addresses
     /// except `addrs`.
-    pub fn rule_mem_abs_concrete(&mut self, addrs: &[Addr]) {
+    pub fn rule_mem_abs_concrete(&mut self, addrs: &[(Addr, MemWidth)]) {
         record!(ReachRule::MemAbsConcrete, addrs);
         let new = MemState::Concrete(MemConcrete::new());
         self.mem_abs_common(new, addrs);
@@ -941,7 +1000,7 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Convert `self.state.mem` to `MemState::Map`, and abstract by forgetting all addresses
     /// except `addrs`.
-    pub fn rule_mem_abs_map(&mut self, addrs: &[Addr]) {
+    pub fn rule_mem_abs_map(&mut self, addrs: &[(Addr, MemWidth)]) {
         record!(ReachRule::MemAbsMap, addrs);
         let new = MemState::Map(MemMap::new());
         self.mem_abs_common(new, addrs);
@@ -949,9 +1008,21 @@ impl<'a, 'b> ReachProof<'a, 'b> {
 
     /// Convert `self.state.mem` to `MemState::Log`, and abstract by forgetting all addresses
     /// except `addrs`.
-    pub fn rule_mem_abs_log(&mut self, addrs: &[Addr]) {
+    pub fn rule_mem_abs_log(&mut self, addrs: &[(Addr, MemWidth)]) {
         record!(ReachRule::MemAbsLog, addrs);
         let new = MemState::Log(MemLog::new());
         self.mem_abs_common(new, addrs);
+    }
+
+    /// Rewrite the value at `addr` in memory to `new`.  Requires the premise `old == new` to be
+    /// available in the context.
+    pub fn rule_rewrite_mem(&mut self, w: MemWidth, addr: Term, new: Term) {
+        record!(ReachRule::RewriteMem, addr, new);
+        let old = self.mem_load(w, addr);
+        self.require_premise_one_of([
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpe(old, new))),
+            &|| Cow::Owned(Prop::Nonzero(Term::cmpe(new, old))),
+        ]);
+        self.mem_store(w, addr, new);
     }
 }

@@ -2,7 +2,7 @@ use crate::Addr;
 use crate::advice::{Record, Playback, RecordingStreamTag, PlaybackStreamTag};
 use crate::kernel::{Proof, ReachProof, PropId};
 use crate::logic::{Prop, Term, VarCounter};
-use crate::micro_ram::Reg;
+use crate::micro_ram::{Reg, MemWidth};
 
 define_numbered_enum! {
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -35,6 +35,7 @@ define_numbered_enum! {
         MemAbsConcrete,
         MemAbsMap,
         MemAbsLog,
+        RewriteMem,
     }
 }
 
@@ -155,16 +156,22 @@ pub fn playback_reach_proof(rpf: &mut ReachProof, ps: impl PlaybackStreamTag) {
                 rpf.rule_forget_reg(reg);
             },
             ReachRule::MemAbsConcrete => {
-                let addrs = ps.playback::<Vec<Addr>>();
+                let addrs = ps.playback::<Vec<(Addr, MemWidth)>>();
                 rpf.rule_mem_abs_concrete(&addrs);
             },
             ReachRule::MemAbsMap => {
-                let addrs = ps.playback::<Vec<Addr>>();
+                let addrs = ps.playback::<Vec<(Addr, MemWidth)>>();
                 rpf.rule_mem_abs_map(&addrs);
             },
             ReachRule::MemAbsLog => {
-                let addrs = ps.playback::<Vec<Addr>>();
+                let addrs = ps.playback::<Vec<(Addr, MemWidth)>>();
                 rpf.rule_mem_abs_log(&addrs);
+            },
+            ReachRule::RewriteMem => {
+                let w = ps.playback::<MemWidth>();
+                let addr = ps.playback::<Term>();
+                let new = ps.playback::<Term>();
+                rpf.rule_rewrite_mem(w, addr, new);
             },
         }
     }

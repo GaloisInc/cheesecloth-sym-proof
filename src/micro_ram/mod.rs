@@ -39,7 +39,7 @@ pub enum Opcode {
     Advise,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub enum MemWidth {
     W1,
     W2,
@@ -156,7 +156,7 @@ impl State {
         self.regs[reg as usize]
     }
 
-    fn operand_value(&self, op: Operand) -> Word {
+    pub fn operand_value(&self, op: Operand) -> Word {
         match op {
             Operand::Reg(r) => self.reg_value(r),
             Operand::Imm(i) => i,
