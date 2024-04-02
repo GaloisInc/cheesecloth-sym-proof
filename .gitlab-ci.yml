@@ -23,5 +23,7 @@ build-and-test:
     - git config --global credential.helper store
     - echo "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab-ext.galois.com" > ~/.git-credentials
     - git clone --recurse-submodules https://gitlab-ext.galois.com/fromager/cheesecloth/witness-checker.git ../witness-checker
+    - git clone https://gitlab-ext.galois.com/fromager/cheesecloth/cheesecloth.git ../cheesecloth
+    - ln -s cheesecloth/rust-support ../rust-support
     - cargo check --features verbose
     - cargo run --features verbose --release --bin proof_grit -- traces/grit.cbor
